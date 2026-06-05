@@ -85,6 +85,8 @@ public final class LeafstormConfig {
         public final ModConfigSpec.IntValue createSmootherBlockEntityBudget;
         public final ModConfigSpec.IntValue createSmootherEntityBudget;
         public final ModConfigSpec.IntValue createSmootherWarmupTicks;
+        public final ModConfigSpec.IntValue createSmootherHighRiskBudget;
+        public final ModConfigSpec.IntValue createSmootherHighRiskInitialDelayTicks;
         public final ModConfigSpec.IntValue createSmootherMaxConsecutiveSkips;
         public final ModConfigSpec.DoubleValue createSmootherMsptThreshold;
         public final ModConfigSpec.IntValue createSmootherLogEveryTicks;
@@ -161,6 +163,12 @@ public final class LeafstormConfig {
             createSmootherWarmupTicks = builder
                     .comment("Only Create objects first seen within this many server ticks are smoothed.")
                     .defineInRange("warmupTicks", 20 * 10, 1, 20 * 60 * 10);
+            createSmootherHighRiskBudget = builder
+                    .comment("Maximum high-risk Create kinetic/fluid/contraption ticks allowed per server tick while smoothing.")
+                    .defineInRange("highRiskBudget", 1, 0, 65_536);
+            createSmootherHighRiskInitialDelayTicks = builder
+                    .comment("Extra startup delay for newly seen high-risk Create kinetic/fluid/contraption objects.")
+                    .defineInRange("highRiskInitialDelayTicks", 20 * 5, 0, 20 * 60 * 10);
             createSmootherMaxConsecutiveSkips = builder
                     .comment("Force one real tick after this many skipped ticks for the same Create object.")
                     .defineInRange("maxConsecutiveSkips", 4, 0, 200);

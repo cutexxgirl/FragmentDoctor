@@ -27,6 +27,7 @@ public final class CreateSmoother {
     private static double lastMspt;
     private static int remainingBlockEntityBudget;
     private static int remainingEntityBudget;
+    private static int remainingHighRiskBudget;
     private static int remainingForcedBlockEntityBudget;
     private static int remainingForcedEntityBudget;
     private static long lastSummaryLogTick = Long.MIN_VALUE;
@@ -44,6 +45,7 @@ public final class CreateSmoother {
         counters.pressured = pressured();
         remainingBlockEntityBudget = counters.pressured ? LeafstormConfig.VALUES.createSmootherBlockEntityBudget.get() : Integer.MAX_VALUE;
         remainingEntityBudget = counters.pressured ? LeafstormConfig.VALUES.createSmootherEntityBudget.get() : Integer.MAX_VALUE;
+        remainingHighRiskBudget = counters.pressured ? LeafstormConfig.VALUES.createSmootherHighRiskBudget.get() : Integer.MAX_VALUE;
         remainingForcedBlockEntityBudget = counters.pressured ? Math.max(1, remainingBlockEntityBudget / 2) : Integer.MAX_VALUE;
         remainingForcedEntityBudget = counters.pressured ? Math.max(1, remainingEntityBudget / 2) : Integer.MAX_VALUE;
         counters.blockEntityBudget = remainingBlockEntityBudget == Integer.MAX_VALUE ? -1 : remainingBlockEntityBudget;
@@ -69,7 +71,7 @@ public final class CreateSmoother {
         }
         String key = blockEntityKey(level, blockEntity);
         counters.seenBlockEntities++;
-        return shouldSkip(BLOCK_ENTITIES.computeIfAbsent(key, ignored -> new TickState()), true);
+        return shouldSkip(BLOCK_ENTITIES.computeIfAbsent(key, ignored -> new TickState()), true, isHighRiskCreateClass(blockEntity.getClass().getName()));
     }
 
     public static boolean shouldSkipEntityTick(ServerLevel level, Entity entity) {
@@ -78,7 +80,7 @@ public final class CreateSmoother {
         }
         String key = entityKey(level, entity);
         counters.seenEntities++;
-        return shouldSkip(ENTITIES.computeIfAbsent(key, ignored -> new TickState()), false);
+        return shouldSkip(ENTITIES.computeIfAbsent(key, ignored -> new TickState()), false, isHighRiskCreateClass(entity.getClass().getName()));
     }
 
     public static Status status() {
@@ -109,6 +111,7 @@ public final class CreateSmoother {
         lastMspt = 0.0D;
         remainingBlockEntityBudget = 0;
         remainingEntityBudget = 0;
+        remainingHighRiskBudget = 0;
         remainingForcedBlockEntityBudget = 0;
         remainingForcedEntityBudget = 0;
         lastSummaryLogTick = Long.MIN_VALUE;
@@ -116,7 +119,7 @@ public final class CreateSmoother {
         lastCounters = new TickCounters();
     }
 
-    private static boolean shouldSkip(TickState state, boolean blockEntity) {
+    private static boolean shouldSkip(TickState state, boolean blockEntity, boolean highRisk) {
         state.lastSeenTick = serverTickIndex;
         long age = serverTickIndex - state.firstSeenTick;
         if (age > LeafstormConfig.VALUES.createSmootherWarmupTicks.get()) {
@@ -124,14 +127,22 @@ public final class CreateSmoother {
             allow(blockEntity);
             return false;
         }
+        if (highRisk && age <= LeafstormConfig.VALUES.createSmootherHighRiskInitialDelayTicks.get()) {
+            skip(blockEntity, state);
+            return true;
+        }
         int maxSkips = LeafstormConfig.VALUES.createSmootherMaxConsecutiveSkips.get();
         if (state.consecutiveSkips >= maxSkips) {
-            if (tryUseForcedBudget(blockEntity)) {
+            if ((!highRisk || tryUseHighRiskBudget()) && tryUseForcedBudget(blockEntity)) {
                 state.consecutiveSkips = 0;
                 counters.forcedTicks++;
                 allow(blockEntity);
                 return false;
             }
+            skip(blockEntity, state);
+            return true;
+        }
+        if (highRisk && !tryUseHighRiskBudget()) {
             skip(blockEntity, state);
             return true;
         }
@@ -146,6 +157,14 @@ public final class CreateSmoother {
             return false;
         }
         skip(blockEntity, state);
+        return true;
+    }
+
+    private static boolean tryUseHighRiskBudget() {
+        if (remainingHighRiskBudget <= 0) {
+            return false;
+        }
+        remainingHighRiskBudget--;
         return true;
     }
 
@@ -209,6 +228,12 @@ public final class CreateSmoother {
         ResourceLocation key = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType());
         return (key != null && "create".equals(key.getNamespace()))
                 || entity.getClass().getName().startsWith("com.simibubi.create.");
+    }
+
+    private static boolean isHighRiskCreateClass(String className) {
+        return className.startsWith("com.simibubi.create.content.kinetics.")
+                || className.startsWith("com.simibubi.create.content.fluids.")
+                || className.startsWith("com.simibubi.create.content.contraptions.");
     }
 
     private static String blockEntityKey(ServerLevel level, BlockEntity blockEntity) {

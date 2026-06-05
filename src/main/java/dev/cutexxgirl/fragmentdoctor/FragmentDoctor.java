@@ -3,7 +3,7 @@ package dev.cutexxgirl.fragmentdoctor;
 import dev.cutexxgirl.fragmentdoctor.modules.DoctorModule;
 import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormConfig;
 import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormDoctorModule;
-import dev.cutexxgirl.fragmentdoctor.modules.scaner.ScanerModule;
+import dev.cutexxgirl.fragmentdoctor.modules.scanner.ScannerModule;
 import java.util.List;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
@@ -20,7 +20,7 @@ public final class FragmentDoctor {
 
     private final List<DoctorModule> modules = List.of(
             new LeafstormDoctorModule(),
-            new ScanerModule()
+            new ScannerModule()
     );
 
     public FragmentDoctor(IEventBus modEventBus, ModContainer modContainer) {

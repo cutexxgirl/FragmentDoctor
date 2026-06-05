@@ -17,33 +17,18 @@ public final class LeafstormConfig {
     }
 
     public static boolean enabled() {
-        return VALUES.enabled.get();
+        return VALUES.schedulerEnabled.get();
     }
 
     public static void setEnabled(boolean enabled) {
-        VALUES.enabled.set(enabled);
+        VALUES.schedulerEnabled.set(enabled);
+        if (enabled) {
+            VALUES.schedulerShadowMode.set(false);
+        }
         SPEC.save();
     }
 
     public static final class Values {
-        public final ModConfigSpec.BooleanValue enabled;
-        public final ModConfigSpec.DoubleValue softMsptThreshold;
-        public final ModConfigSpec.DoubleValue hardMsptThreshold;
-        public final ModConfigSpec.DoubleValue emergencyMsptThreshold;
-        public final ModConfigSpec.IntValue emergencyQueueDepth;
-        public final ModConfigSpec.IntValue softBudget;
-        public final ModConfigSpec.IntValue hardBudget;
-        public final ModConfigSpec.IntValue emergencyBudget;
-        public final ModConfigSpec.IntValue maxDeferredDrainsPerTick;
-        public final ModConfigSpec.DoubleValue maxDeferredDrainMillisPerTick;
-        public final ModConfigSpec.DoubleValue deferredDrainMsptCeiling;
-        public final ModConfigSpec.IntValue deferredDrainQuietLeafTicks;
-        public final ModConfigSpec.IntValue deferDelayTicks;
-        public final ModConfigSpec.BooleanValue enableDeduplication;
-        public final ModConfigSpec.IntValue maxDeferredDedupKeys;
-        public final ModConfigSpec.IntValue dedupGraceTicks;
-        public final ModConfigSpec.BooleanValue queueRecoveryAllowsHardBudget;
-        public final ModConfigSpec.IntValue logEveryTicks;
         public final ModConfigSpec.BooleanValue consoleLogging;
         public final ModConfigSpec.BooleanValue fileLogging;
         public final ModConfigSpec.BooleanValue schedulerEnabled;
@@ -58,90 +43,39 @@ public final class LeafstormConfig {
         public final ModConfigSpec.DoubleValue schedulerHardMsptThreshold;
         public final ModConfigSpec.IntValue schedulerMaxJobs;
         public final ModConfigSpec.IntValue schedulerJobTtlTicks;
+        public final ModConfigSpec.IntValue schedulerHotChunkScheduleThreshold;
+        public final ModConfigSpec.IntValue schedulerHotChunkDelayTicks;
+        public final ModConfigSpec.IntValue schedulerHotChunkMaxDelayTicks;
         public final ModConfigSpec.IntValue schedulerLogEveryTicks;
 
         private Values(ModConfigSpec.Builder builder) {
             builder.push("doctor");
             builder.push("leafstorm");
-            enabled = builder
-                    .comment("Master switch for the scheduled leaf tick limiter. Disabled by default.")
-                    .define("enabled", false);
-            softMsptThreshold = builder
-                    .comment("Start soft limiting when the previous server tick MSPT is at least this value.")
-                    .defineInRange("softMsptThreshold", 50.0D, 1.0D, 5000.0D);
-            hardMsptThreshold = builder
-                    .comment("Use the hard budget when the previous server tick MSPT is at least this value.")
-                    .defineInRange("hardMsptThreshold", 100.0D, 1.0D, 5000.0D);
-            emergencyMsptThreshold = builder
-                    .comment("Use the emergency budget when the previous server tick MSPT is at least this value.")
-                    .defineInRange("emergencyMsptThreshold", 200.0D, 1.0D, 5000.0D);
-            emergencyQueueDepth = builder
-                    .comment("Use emergency queue handling when the scheduled block tick queue reaches this size.")
-                    .defineInRange("emergencyQueueDepth", 50_000, 1, 1_000_000);
-            softBudget = builder
-                    .comment("Leaf scheduled ticks allowed per server tick in soft mode.")
-                    .defineInRange("softBudget", 2_000, 1, 65_536);
-            hardBudget = builder
-                    .comment("Leaf scheduled ticks allowed per server tick in hard mode.")
-                    .defineInRange("hardBudget", 500, 1, 65_536);
-            emergencyBudget = builder
-                    .comment("Leaf scheduled ticks allowed per server tick in emergency mode.")
-                    .defineInRange("emergencyBudget", 250, 1, 65_536);
-            maxDeferredDrainsPerTick = builder
-                    .comment("Maximum deferred leaf ticks the doctor may execute per server tick. Deferred drain is separate from the limiter budget.")
-                    .defineInRange("maxDeferredDrainsPerTick", 16, 0, 65_536);
-            maxDeferredDrainMillisPerTick = builder
-                    .comment("Soft wall-clock budget, in milliseconds, for executing deferred leaf ticks during one server tick.")
-                    .defineInRange("maxDeferredDrainMillisPerTick", 2.0D, 0.0D, 1000.0D);
-            deferredDrainMsptCeiling = builder
-                    .comment("Pause deferred leaf execution when the previous server tick MSPT is at or above this value.")
-                    .defineInRange("deferredDrainMsptCeiling", 40.0D, 1.0D, 5000.0D);
-            deferredDrainQuietLeafTicks = builder
-                    .comment("Pause deferred leaf execution if the previous tick still processed at least this many leaf ticks.")
-                    .defineInRange("deferredDrainQuietLeafTicks", 128, 0, 65_536);
-            deferDelayTicks = builder
-                    .comment("How many game ticks to delay a leaf tick after the limiter defers it.")
-                    .defineInRange("deferDelayTicks", 20, 1, 20 * 60);
-            enableDeduplication = builder
-                    .comment("Drop duplicate deferred leaf ticks that are already scheduled for a future game tick.")
-                    .define("enableDeduplication", true);
-            maxDeferredDedupKeys = builder
-                    .comment("Maximum number of deferred leaf dedup keys retained by the doctor.")
-                    .defineInRange("maxDeferredDedupKeys", 250_000, 1_000, 2_000_000);
-            dedupGraceTicks = builder
-                    .comment("Small future-tick grace window used when checking deferred leaf duplicate keys.")
-                    .defineInRange("dedupGraceTicks", 1, 0, 20);
-            queueRecoveryAllowsHardBudget = builder
-                    .comment("When the queue is large but clearly shrinking and MSPT is healthy, use hard budget instead of emergency budget.")
-                    .define("queueRecoveryAllowsHardBudget", true);
-            logEveryTicks = builder
-                    .comment("Minimum server ticks between repeated limiter summary log lines.")
-                    .defineInRange("logEveryTicks", 100, 1, 20 * 60);
             consoleLogging = builder
-                    .comment("Write limiter summaries to the Fragment Doctor logger.")
+                    .comment("Write leafstorm scheduler summaries to the Fragment Doctor logger.")
                     .define("consoleLogging", true);
             fileLogging = builder
-                    .comment("Write JSONL limiter summaries under fragmentdoctor/doctor/leafstorm.")
+                    .comment("Write JSONL leafstorm scheduler summaries under fragmentdoctor/doctor/leafstorm.")
                     .define("fileLogging", true);
             builder.push("scheduler");
             schedulerEnabled = builder
-                    .comment("Enable the replacement scheduler for leaf scheduled ticks. Shadow mode observes without cancelling vanilla.")
+                    .comment("Enable the replacement scheduler for leaf scheduled ticks.")
                     .define("enabled", false);
             schedulerShadowMode = builder
                     .comment("When true, record what would be intercepted but leave vanilla scheduling untouched.")
-                    .define("shadowMode", true);
+                    .define("shadowMode", false);
             schedulerInterceptVanillaLeafSchedules = builder
                     .comment("Intercept LeavesBlock scheduled ticks at LevelTicks.schedule when the replacement scheduler is enabled.")
                     .define("interceptVanillaLeafSchedules", true);
             schedulerGlobalBudget = builder
                     .comment("Normal global leaf scheduler jobs executed per server tick.")
-                    .defineInRange("globalBudget", 64, 0, 65_536);
+                    .defineInRange("globalBudget", 128, 0, 65_536);
             schedulerScanBudget = builder
                     .comment("Maximum scheduler heap poll/drop/skip operations per server tick. This is separate from execution budget.")
-                    .defineInRange("scanBudget", 256, 1, 262_144);
+                    .defineInRange("scanBudget", 1024, 1, 262_144);
             schedulerPerChunkBudget = builder
                     .comment("Maximum replacement scheduler leaf jobs executed from one chunk per server tick.")
-                    .defineInRange("perChunkBudget", 8, 1, 65_536);
+                    .defineInRange("perChunkBudget", 4, 1, 65_536);
             schedulerMaxDrainMillisPerTick = builder
                     .comment("Soft wall-clock budget, in milliseconds, for replacement scheduler drain work during one server tick.")
                     .defineInRange("maxDrainMillisPerTick", 2.0D, 0.0D, 1000.0D);
@@ -156,10 +90,19 @@ public final class LeafstormConfig {
                     .defineInRange("hardMsptThreshold", 70.0D, 1.0D, 5000.0D);
             schedulerMaxJobs = builder
                     .comment("Maximum canonical leaf jobs retained across all replacement scheduler queues.")
-                    .defineInRange("maxJobs", 250_000, 1_000, 2_000_000);
+                    .defineInRange("maxJobs", 500_000, 1_000, 2_000_000);
             schedulerJobTtlTicks = builder
                     .comment("Drop replacement scheduler jobs older than this many game ticks.")
-                    .defineInRange("jobTtlTicks", 20 * 120, 20, 20 * 60 * 30);
+                    .defineInRange("jobTtlTicks", 20 * 60, 20, 20 * 60 * 30);
+            schedulerHotChunkScheduleThreshold = builder
+                    .comment("If one chunk tries to schedule at least this many leaf ticks in one server tick, debounce later jobs from that chunk.")
+                    .defineInRange("hotChunkScheduleThreshold", 256, 1, 65_536);
+            schedulerHotChunkDelayTicks = builder
+                    .comment("Base delay applied to new or repeated jobs from a hot chunk.")
+                    .defineInRange("hotChunkDelayTicks", 20, 1, 20 * 60);
+            schedulerHotChunkMaxDelayTicks = builder
+                    .comment("Maximum adaptive delay applied to extremely hot chunks.")
+                    .defineInRange("hotChunkMaxDelayTicks", 20 * 10, 1, 20 * 60 * 10);
             schedulerLogEveryTicks = builder
                     .comment("Minimum server ticks between repeated replacement scheduler summary log lines.")
                     .defineInRange("logEveryTicks", 100, 1, 20 * 60);

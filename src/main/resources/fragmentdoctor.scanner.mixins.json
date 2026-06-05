@@ -1,0 +1,29 @@
+{
+  "required": false,
+  "package": "dev.cutexxgirl.fragmentdoctor.modules.scanner.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "BlockStateBaseMixin",
+    "BrainMixin",
+    "EventBusMixin",
+    "EventListenerFactoryMixin",
+    "LevelChunkBoundTickingBlockEntityAccessor",
+    "LevelChunkBoundTickingBlockEntityMixin",
+    "LevelEntityQueryMixin",
+    "LevelTicksMixin",
+    "MinecraftServerMixin",
+    "MobMixin",
+    "PathNavigationMixin",
+    "WrappedGoalMixin",
+    "ServerLevelMixin"
+  ],
+  "client": [
+    "GameRendererMixin",
+    "InputConstantsMixin",
+    "MinecraftMixin",
+    "WindowMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

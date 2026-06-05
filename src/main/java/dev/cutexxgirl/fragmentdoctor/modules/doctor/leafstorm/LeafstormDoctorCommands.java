@@ -1,7 +1,6 @@
 package dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm;
 
 import com.mojang.brigadier.CommandDispatcher;
-import java.util.Locale;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -26,59 +25,36 @@ public final class LeafstormDoctorCommands {
     }
 
     private static int status(CommandSourceStack source) {
-        LeafstormDoctor.Status status = LeafstormDoctor.status();
-        LeafstormSchedulerReplacement.Status scheduler = status.scheduler();
-        source.sendSuccess(() -> Component.literal("[Fragment Doctor] leafstorm limiter enabled=" + status.enabled()
-                + " mode=" + status.mode()
-                + " trend=" + status.queueTrend()
-                + " last_mspt=" + String.format(Locale.ROOT, "%.2f", status.lastMspt())
-                + " queue=" + status.queueDepth()
-                + " budget=" + readableBudget(status.budget())
-                + " remaining=" + readableBudget(status.remainingBudget())
-                + " drain_budget=" + status.drainBudget()
-                + " drain_remaining=" + status.remainingDrainBudget()
-                + " drain_paused=" + status.drainPaused()
-                + " drain_pause=" + status.drainPauseReason()
-                + " seen=" + status.seenLeaves()
-                + " allowed=" + status.allowedLeaves()
-                + " deferred=" + status.deferredLeaves()
-                + " drained=" + status.drainedDeferredLeaves()
-                + " skipped_drain=" + status.skippedDeferredDrains()
-                + " deduped=" + status.deduplicatedLeaves()
-                + " deferred_queue=" + status.deferredQueueSize()
-                + " top_leaves=" + status.topLeaves()
-                + " scheduler_configured=" + scheduler.configured()
-                + " scheduler_active=" + scheduler.active()
-                + " scheduler_shadow=" + scheduler.shadowMode()
-                + " scheduler_pending=" + scheduler.pendingJobs()
-                + " scheduler_heap=" + scheduler.heapEntries()
-                + " scheduler_budget=" + scheduler.globalBudget()
-                + " scheduler_scan_budget=" + scheduler.scanBudget()
-                + " scheduler_execution_used=" + scheduler.executionBudgetUsed()
-                + " scheduler_scan_used=" + scheduler.scanBudgetUsed()
-                + " scheduler_per_chunk=" + scheduler.perChunkBudget()
-                + " scheduler_intercepted=" + scheduler.intercepted()
-                + " scheduler_enqueued=" + scheduler.enqueued()
-                + " scheduler_coalesced=" + scheduler.coalesced()
-                + " scheduler_executed=" + scheduler.executed()
-                + " scheduler_skipped_hot_chunk=" + scheduler.skippedHotChunk()
-                + " scheduler_dropped_stale=" + scheduler.droppedStale()
-                + " scheduler_dropped_overflow=" + scheduler.droppedOverflow()
-                + " scheduler_drain_paused=" + scheduler.drainPaused()
-                + " scheduler_drain_pause=" + scheduler.drainPauseReason()
-                + " scheduler_top_leaves=" + scheduler.topLeaves()
-                + " scheduler_top_chunks=" + scheduler.topChunks()), false);
-        return status.enabled() || scheduler.configured() ? 1 : 0;
+        LeafstormSchedulerReplacement.Status scheduler = LeafstormSchedulerReplacement.status();
+        source.sendSuccess(() -> Component.literal("[Fragment Doctor] leafstorm scheduler configured=" + scheduler.configured()
+                + " active=" + scheduler.active()
+                + " shadow=" + scheduler.shadowMode()
+                + " pending=" + scheduler.pendingJobs()
+                + " heap=" + scheduler.heapEntries()
+                + " budget=" + scheduler.globalBudget()
+                + " scan_budget=" + scheduler.scanBudget()
+                + " execution_used=" + scheduler.executionBudgetUsed()
+                + " scan_used=" + scheduler.scanBudgetUsed()
+                + " per_chunk=" + scheduler.perChunkBudget()
+                + " intercepted=" + scheduler.intercepted()
+                + " enqueued=" + scheduler.enqueued()
+                + " coalesced=" + scheduler.coalesced()
+                + " debounced=" + scheduler.debounced()
+                + " executed=" + scheduler.executed()
+                + " skipped_hot_chunk=" + scheduler.skippedHotChunk()
+                + " dropped_stale=" + scheduler.droppedStale()
+                + " dropped_overflow=" + scheduler.droppedOverflow()
+                + " drain_paused=" + scheduler.drainPaused()
+                + " drain_pause=" + scheduler.drainPauseReason()
+                + " top_leaves=" + scheduler.topLeaves()
+                + " top_chunks=" + scheduler.topChunks()), false);
+        return scheduler.configured() ? 1 : 0;
     }
 
     private static int setEnabled(CommandSourceStack source, boolean enabled) {
         LeafstormConfig.setEnabled(enabled);
-        source.sendSuccess(() -> Component.literal("[Fragment Doctor] leafstorm limiter " + (enabled ? "enabled" : "disabled")
+        source.sendSuccess(() -> Component.literal("[Fragment Doctor] leafstorm scheduler " + (enabled ? "enabled" : "disabled")
                 + " in fragmentdoctor-common.toml"), true);
         return 1;
-    }
-
-    private static String readableBudget(int budget) {
-        return budget < 0 ? "unlimited" : Integer.toString(budget);
     }
 }

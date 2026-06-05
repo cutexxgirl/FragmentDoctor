@@ -6,22 +6,22 @@ The long-term goal is to inspect TPS, MSPT, FPS and other runtime signals in lar
 
 ## Modules
 
-- `scaner` - command-driven TPS/MSPT cause profiler.
+- `scanner` - command-driven TPS/MSPT cause profiler.
 
 ## Layout
 
 - `dev.cutexxgirl.fragmentdoctor` - mod entry point and shared constants.
 - `dev.cutexxgirl.fragmentdoctor.modules` - module contracts and shared module code.
-- `dev.cutexxgirl.fragmentdoctor.modules.scaner` - first diagnostics module.
+- `dev.cutexxgirl.fragmentdoctor.modules.scanner` - first diagnostics module.
 
-## Scaner commands
+## Scanner commands
 
-- `/fragmentdoctor scaner start [seconds]` - start a profiling session, default 60 seconds.
-- `/fragmentdoctor scaner stop` - stop the active session and write a summary.
-- `/fragmentdoctor scaner status` - show whether a scan is running.
-- `/fragmentdoctor scaner last` - show the last summary path.
+- `/fragmentdoctor scanner start [seconds]` - start a profiling session, default 60 seconds.
+- `/fragmentdoctor scanner stop` - stop the active session and write a summary.
+- `/fragmentdoctor scanner status` - show whether a scan is running.
+- `/fragmentdoctor scanner last` - show the last summary path.
 
-Scaner writes AI-readable diagnostic files to `fragmentdoctor/scaner` in the server/game working directory:
+Scanner writes AI-readable diagnostic files to `fragmentdoctor/scanner` in the server/game working directory:
 
 - `scan-YYYYMMDD-HHMMSS.jsonl` - detailed event stream.
 - `scan-YYYYMMDD-HHMMSS-summary.md` - ranked suspect summary.

@@ -51,7 +51,7 @@ Fragment Doctor is a modular diagnostics mod for profiling TPS, MSPT, FPS and ot
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 [[mixins]]
-config="fragmentdoctor.scaner.mixins.json"
+config="fragmentdoctor.scanner.mixins.json"
 
 # The [[accessTransformers]] block allows you to declare where your AT file is.
 # If this block is omitted, a fallback attempt will be made to load an AT from META-INF/accesstransformer.cfg

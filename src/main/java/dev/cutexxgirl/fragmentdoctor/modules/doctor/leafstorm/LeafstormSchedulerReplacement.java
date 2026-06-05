@@ -2,7 +2,7 @@ package dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm;
 
 import com.google.gson.JsonObject;
 import dev.cutexxgirl.fragmentdoctor.FragmentDoctor;
-import dev.cutexxgirl.fragmentdoctor.modules.scaner.instrumentation.CostRecorder;
+import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.CostRecorder;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,6 +35,7 @@ public final class LeafstormSchedulerReplacement {
     private static int currentScanBudget;
     private static int remainingExecutionBudget;
     private static int remainingScanBudget;
+    private static long tickStartNanos;
     private static double lastMspt;
     private static long lastSummaryLogTick = Long.MIN_VALUE;
     private static RuntimeMode currentMode = RuntimeMode.OFF;
@@ -44,17 +45,17 @@ public final class LeafstormSchedulerReplacement {
     private LeafstormSchedulerReplacement() {
     }
 
-    public static void onServerTickStart(double previousMspt) {
+    public static void onServerTickStart() {
         serverTickIndex++;
-        lastMspt = previousMspt;
+        tickStartNanos = System.nanoTime();
         counters = new TickCounters();
         RuntimeMode mode = runtimeMode();
         if (mode != currentMode) {
             clear();
             currentMode = mode;
         }
-        currentGlobalBudget = mode == RuntimeMode.ACTIVE ? globalBudgetFor(previousMspt) : 0;
-        currentScanBudget = mode == RuntimeMode.OFF ? 0 : scanBudgetFor(previousMspt);
+        currentGlobalBudget = mode == RuntimeMode.ACTIVE ? globalBudgetFor(lastMspt) : 0;
+        currentScanBudget = mode == RuntimeMode.ACTIVE ? scanBudgetFor(lastMspt) : 0;
         remainingExecutionBudget = currentGlobalBudget;
         remainingScanBudget = currentScanBudget;
         counters.globalBudget = currentGlobalBudget;
@@ -64,6 +65,10 @@ public final class LeafstormSchedulerReplacement {
     }
 
     public static void onServerTickEnd(MinecraftServer server) {
+        if (tickStartNanos != 0L) {
+            lastMspt = (System.nanoTime() - tickStartNanos) / 1_000_000.0D;
+            tickStartNanos = 0L;
+        }
         counters.pendingJobs = totalJobs;
         counters.heapEntries = heapEntries();
         lastCounters = counters.copy();
@@ -88,14 +93,13 @@ public final class LeafstormSchedulerReplacement {
         counters.incrementChunk(chunkKey(pos));
         CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_VANILLA_LEAF_INTERCEPTED);
 
-        LeafScheduler scheduler = SCHEDULERS.computeIfAbsent(tickAccess, ignored -> new LeafScheduler());
-        rememberJob(scheduler, type, pos, tick, mode == RuntimeMode.ACTIVE);
-
         if (mode == RuntimeMode.SHADOW) {
             counters.shadowIntercepted++;
             return ScheduleDecision.RECORDED_PASS_THROUGH;
         }
 
+        LeafScheduler scheduler = SCHEDULERS.computeIfAbsent(tickAccess, ignored -> new LeafScheduler());
+        rememberJob(scheduler, type, pos, tick);
         return ScheduleDecision.CANCEL_VANILLA;
     }
 
@@ -103,18 +107,21 @@ public final class LeafstormSchedulerReplacement {
         return currentMode == RuntimeMode.ACTIVE;
     }
 
-    private static void rememberJob(LeafScheduler scheduler, Object type, BlockPos pos, ScheduledTick<?> tick, boolean recordSchedulerOrigin) {
+    private static void rememberJob(LeafScheduler scheduler, Object type, BlockPos pos, ScheduledTick<?> tick) {
         String blockId = blockId((Block)type);
+        long chunkKey = chunkKey(pos);
+        int chunkSchedulesThisTick = counters.countForChunk(chunkKey);
+        long dueTick = debouncedDueTick(tick.triggerTick(), chunkSchedulesThisTick);
         LeafKey key = new LeafKey(blockId, pos.asLong());
         LeafJob existing = scheduler.jobsByKey.get(key);
         if (existing == null) {
-            LeafJob job = new LeafJob(key, type, pos.immutable(), tick.triggerTick(), tick.priority(), tick.subTickOrder(), serverTickIndex);
+            LeafJob job = new LeafJob(key, type, pos.immutable(), tick.triggerTick(), dueTick, tick.priority(), tick.subTickOrder(), serverTickIndex);
             scheduler.jobsByKey.put(key, job);
             scheduler.dueHeap.add(new HeapEntry(key, job.dueTick, job.priority, job.subTickOrder, job.version, sequence++));
             totalJobs++;
             counters.enqueued++;
-            if (recordSchedulerOrigin) {
-                CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_SCHEDULER_ENQUEUED);
+            if (dueTick > tick.triggerTick()) {
+                counters.debounced++;
             }
             enforceMaxJobs();
             compactHeapIfNeeded(scheduler);
@@ -123,17 +130,21 @@ public final class LeafstormSchedulerReplacement {
 
         existing.touches++;
         existing.lastTouchedServerTick = serverTickIndex;
-        if (isEarlier(tick, existing)) {
-            existing.dueTick = tick.triggerTick();
+        if (dueTick > tick.triggerTick()) {
+            counters.debounced++;
+            if (dueTick > existing.dueTick) {
+                existing.dueTick = dueTick;
+                existing.version++;
+                scheduler.dueHeap.add(new HeapEntry(key, existing.dueTick, existing.priority, existing.subTickOrder, existing.version, sequence++));
+            }
+        } else if (isEarlier(tick, existing)) {
+            existing.dueTick = dueTick;
             existing.priority = tick.priority();
             existing.subTickOrder = tick.subTickOrder();
             existing.version++;
             scheduler.dueHeap.add(new HeapEntry(key, existing.dueTick, existing.priority, existing.subTickOrder, existing.version, sequence++));
         }
         counters.coalesced++;
-        if (recordSchedulerOrigin) {
-            CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_SCHEDULER_COALESCED);
-        }
         compactHeapIfNeeded(scheduler);
     }
 
@@ -170,7 +181,7 @@ public final class LeafstormSchedulerReplacement {
                 break;
             }
             if (isExpired(job, gameTime)) {
-                dropJob(scheduler, job, CostRecorder.ORIGIN_SCHEDULER_DROPPED_STALE);
+                dropJob(scheduler, job);
                 counters.droppedStale++;
                 continue;
             }
@@ -179,7 +190,6 @@ public final class LeafstormSchedulerReplacement {
             if (usedInChunk >= perChunkBudget) {
                 counters.skippedHotChunk++;
                 rescheduleForNextTick(scheduler, job, gameTime);
-                CostRecorder.recordScheduledTick(job.type, job.pos, CostRecorder.ORIGIN_SCHEDULER_SKIPPED_BUDGET);
                 continue;
             }
 
@@ -192,7 +202,6 @@ public final class LeafstormSchedulerReplacement {
             counters.lastBlockId = job.key.blockId();
             counters.incrementLeaf(job.key.blockId());
             counters.incrementChunk(chunkKey);
-            CostRecorder.recordScheduledTick(job.type, job.pos, CostRecorder.ORIGIN_SCHEDULER_EXECUTED);
             ticker.accept(job.pos, (T)job.type);
         }
 
@@ -224,6 +233,7 @@ public final class LeafstormSchedulerReplacement {
                 snapshot.shadowIntercepted,
                 snapshot.enqueued,
                 snapshot.coalesced,
+                snapshot.debounced,
                 snapshot.executed,
                 snapshot.skippedHotChunk,
                 snapshot.droppedStale,
@@ -242,6 +252,8 @@ public final class LeafstormSchedulerReplacement {
         currentScanBudget = 0;
         remainingExecutionBudget = 0;
         remainingScanBudget = 0;
+        tickStartNanos = 0L;
+        lastMspt = 0.0D;
         counters = new TickCounters();
         lastCounters = new TickCounters();
     }
@@ -288,6 +300,18 @@ public final class LeafstormSchedulerReplacement {
         return Math.max(1, configuredBudget / 8);
     }
 
+    private static long debouncedDueTick(long requestedDueTick, int chunkSchedulesThisTick) {
+        int hotThreshold = LeafstormConfig.VALUES.schedulerHotChunkScheduleThreshold.get();
+        if (chunkSchedulesThisTick < hotThreshold) {
+            return requestedDueTick;
+        }
+        int baseDelay = LeafstormConfig.VALUES.schedulerHotChunkDelayTicks.get();
+        int maxDelay = LeafstormConfig.VALUES.schedulerHotChunkMaxDelayTicks.get();
+        int extraWindows = Math.max(0, (chunkSchedulesThisTick - hotThreshold) / Math.max(1, hotThreshold));
+        long delay = Math.min(maxDelay, (long)baseDelay * (1L + extraWindows));
+        return requestedDueTick + delay;
+    }
+
     private static PollResult pollReadyJob(LeafScheduler scheduler, long gameTime, DrainScan scan) {
         while (!scheduler.dueHeap.isEmpty()) {
             if (scan.remaining <= 0) {
@@ -319,10 +343,9 @@ public final class LeafstormSchedulerReplacement {
         return gameTime - job.firstDueTick > LeafstormConfig.VALUES.schedulerJobTtlTicks.get();
     }
 
-    private static void dropJob(LeafScheduler scheduler, LeafJob job, String origin) {
+    private static void dropJob(LeafScheduler scheduler, LeafJob job) {
         if (scheduler.jobsByKey.remove(job.key) != null) {
             totalJobs--;
-            CostRecorder.recordScheduledTick(job.type, job.pos, origin);
         }
     }
 
@@ -351,7 +374,6 @@ public final class LeafstormSchedulerReplacement {
                 jobs.remove();
                 totalJobs--;
                 counters.droppedOverflow++;
-                CostRecorder.recordScheduledTick(job.type, job.pos, CostRecorder.ORIGIN_SCHEDULER_DROPPED_OVERFLOW);
             }
             if (scheduler.jobsByKey.isEmpty()) {
                 outer.remove();
@@ -383,11 +405,12 @@ public final class LeafstormSchedulerReplacement {
         lastSummaryLogTick = serverTickIndex;
         if (LeafstormConfig.VALUES.consoleLogging.get()) {
             FragmentDoctor.LOGGER.warn(
-                    "Leafstorm scheduler: mode={} intercepted={} enqueued={} coalesced={} executed={} skipped_hot_chunk={} dropped_stale={} dropped_overflow={} pending={} execution_budget={} scan_budget={} execution_used={} scan_used={} per_chunk={} paused={} pause_reason={} mspt={} top_leaves={} top_chunks={}",
+                    "Leafstorm scheduler: mode={} intercepted={} enqueued={} coalesced={} debounced={} executed={} skipped_hot_chunk={} dropped_stale={} dropped_overflow={} pending={} execution_budget={} scan_budget={} execution_used={} scan_used={} per_chunk={} paused={} pause_reason={} mspt={} top_leaves={} top_chunks={}",
                     currentMode.logName,
                     counters.intercepted,
                     counters.enqueued,
                     counters.coalesced,
+                    counters.debounced,
                     counters.executed,
                     counters.skippedHotChunk,
                     counters.droppedStale,
@@ -428,6 +451,7 @@ public final class LeafstormSchedulerReplacement {
         summary.addProperty("shadow_intercepted", counters.shadowIntercepted);
         summary.addProperty("enqueued", counters.enqueued);
         summary.addProperty("coalesced", counters.coalesced);
+        summary.addProperty("debounced", counters.debounced);
         summary.addProperty("executed", counters.executed);
         summary.addProperty("skipped_hot_chunk", counters.skippedHotChunk);
         summary.addProperty("dropped_stale", counters.droppedStale);
@@ -549,11 +573,11 @@ public final class LeafstormSchedulerReplacement {
         private int touches = 1;
         private long lastTouchedServerTick;
 
-        private LeafJob(LeafKey key, Object type, BlockPos pos, long dueTick, TickPriority priority, long subTickOrder, long serverTickIndex) {
+        private LeafJob(LeafKey key, Object type, BlockPos pos, long firstDueTick, long dueTick, TickPriority priority, long subTickOrder, long serverTickIndex) {
             this.key = key;
             this.type = type;
             this.pos = pos;
-            this.firstDueTick = dueTick;
+            this.firstDueTick = firstDueTick;
             this.dueTick = dueTick;
             this.priority = priority;
             this.subTickOrder = subTickOrder;
@@ -583,6 +607,7 @@ public final class LeafstormSchedulerReplacement {
         private int shadowIntercepted;
         private int enqueued;
         private int coalesced;
+        private int debounced;
         private int executed;
         private int skippedHotChunk;
         private int droppedStale;
@@ -603,8 +628,12 @@ public final class LeafstormSchedulerReplacement {
             chunkCounts.merge(chunkKey, 1, Integer::sum);
         }
 
+        private int countForChunk(long chunkKey) {
+            return chunkCounts.getOrDefault(chunkKey, 0);
+        }
+
         private int events() {
-            return intercepted + enqueued + coalesced + executed + skippedHotChunk + droppedStale + droppedOverflow;
+            return intercepted + enqueued + coalesced + debounced + executed + skippedHotChunk + droppedStale + droppedOverflow;
         }
 
         private String topLeaves() {
@@ -641,6 +670,7 @@ public final class LeafstormSchedulerReplacement {
             copy.shadowIntercepted = shadowIntercepted;
             copy.enqueued = enqueued;
             copy.coalesced = coalesced;
+            copy.debounced = debounced;
             copy.executed = executed;
             copy.skippedHotChunk = skippedHotChunk;
             copy.droppedStale = droppedStale;
@@ -671,6 +701,7 @@ public final class LeafstormSchedulerReplacement {
             int shadowIntercepted,
             int enqueued,
             int coalesced,
+            int debounced,
             int executed,
             int skippedHotChunk,
             int droppedStale,

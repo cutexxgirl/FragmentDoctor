@@ -50,7 +50,9 @@ public final class LeafstormConfig {
         public final ModConfigSpec.BooleanValue schedulerShadowMode;
         public final ModConfigSpec.BooleanValue schedulerInterceptVanillaLeafSchedules;
         public final ModConfigSpec.IntValue schedulerGlobalBudget;
+        public final ModConfigSpec.IntValue schedulerScanBudget;
         public final ModConfigSpec.IntValue schedulerPerChunkBudget;
+        public final ModConfigSpec.DoubleValue schedulerMaxDrainMillisPerTick;
         public final ModConfigSpec.DoubleValue schedulerHealthyMsptThreshold;
         public final ModConfigSpec.DoubleValue schedulerSoftMsptThreshold;
         public final ModConfigSpec.DoubleValue schedulerHardMsptThreshold;
@@ -134,9 +136,15 @@ public final class LeafstormConfig {
             schedulerGlobalBudget = builder
                     .comment("Normal global leaf scheduler jobs executed per server tick.")
                     .defineInRange("globalBudget", 64, 0, 65_536);
+            schedulerScanBudget = builder
+                    .comment("Maximum scheduler heap poll/drop/skip operations per server tick. This is separate from execution budget.")
+                    .defineInRange("scanBudget", 256, 1, 262_144);
             schedulerPerChunkBudget = builder
                     .comment("Maximum replacement scheduler leaf jobs executed from one chunk per server tick.")
                     .defineInRange("perChunkBudget", 8, 1, 65_536);
+            schedulerMaxDrainMillisPerTick = builder
+                    .comment("Soft wall-clock budget, in milliseconds, for replacement scheduler drain work during one server tick.")
+                    .defineInRange("maxDrainMillisPerTick", 2.0D, 0.0D, 1000.0D);
             schedulerHealthyMsptThreshold = builder
                     .comment("Below this previous-tick MSPT, the scheduler may use recovery budget.")
                     .defineInRange("healthyMsptThreshold", 30.0D, 1.0D, 5000.0D);

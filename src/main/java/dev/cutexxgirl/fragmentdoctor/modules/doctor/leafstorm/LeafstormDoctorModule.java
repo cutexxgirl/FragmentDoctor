@@ -5,6 +5,7 @@ import dev.cutexxgirl.fragmentdoctor.modules.DoctorModule;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 
 public final class LeafstormDoctorModule implements DoctorModule {
     public static final String ID = "doctor.leafstorm";
@@ -18,6 +19,7 @@ public final class LeafstormDoctorModule implements DoctorModule {
     public void register(IEventBus modEventBus, IEventBus gameEventBus) {
         modEventBus.addListener(this::onCommonSetup);
         gameEventBus.addListener(this::onRegisterCommands);
+        gameEventBus.addListener(this::onServerStopping);
     }
 
     private void onCommonSetup(FMLCommonSetupEvent event) {
@@ -26,5 +28,9 @@ public final class LeafstormDoctorModule implements DoctorModule {
 
     private void onRegisterCommands(RegisterCommandsEvent event) {
         LeafstormDoctorCommands.register(event.getDispatcher());
+    }
+
+    private void onServerStopping(ServerStoppingEvent event) {
+        LeafstormSchedulerReplacement.clearForServerStop();
     }
 }

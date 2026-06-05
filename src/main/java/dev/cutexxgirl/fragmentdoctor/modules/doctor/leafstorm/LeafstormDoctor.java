@@ -78,7 +78,7 @@ public final class LeafstormDoctor {
     }
 
     public static Decision beforeScheduledTick(Object tickAccess, Object type, BlockPos pos, int queueDepth, long gameTime) {
-        if (!LeafstormConfig.enabled() || !(type instanceof Block block) || !(block instanceof LeavesBlock)) {
+        if (LeafstormSchedulerReplacement.activeReplacement() || !LeafstormConfig.enabled() || !(type instanceof Block block) || !(block instanceof LeavesBlock)) {
             return RUN;
         }
         updateLivePressure(queueDepth);
@@ -120,7 +120,7 @@ public final class LeafstormDoctor {
 
     @SuppressWarnings("unchecked")
     public static <T> void drainDeferredTicks(Object tickAccess, BiConsumer<BlockPos, T> ticker, int queueDepth, long gameTime) {
-        if (!LeafstormConfig.enabled()) {
+        if (LeafstormSchedulerReplacement.activeReplacement() || !LeafstormConfig.enabled()) {
             return;
         }
         DeferredLeafTickQueue queue = DEFERRED_QUEUES.get(tickAccess);
@@ -341,7 +341,7 @@ public final class LeafstormDoctor {
     }
 
     private static void writeSummaryIfNeeded(MinecraftServer server) {
-        if (!LeafstormConfig.enabled() || counters.mitigationEvents() <= 0) {
+        if (LeafstormSchedulerReplacement.activeReplacement() || !LeafstormConfig.enabled() || counters.mitigationEvents() <= 0) {
             if (currentMode == Mode.OFF) {
                 lastLoggedMode = Mode.OFF;
             }

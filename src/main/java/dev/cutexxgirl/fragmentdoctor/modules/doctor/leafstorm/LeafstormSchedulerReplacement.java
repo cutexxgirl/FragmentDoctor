@@ -32,8 +32,12 @@ public final class LeafstormSchedulerReplacement {
     private static long sequence;
     private static int totalJobs;
     private static int currentGlobalBudget;
+    private static int currentScanBudget;
+    private static int remainingExecutionBudget;
+    private static int remainingScanBudget;
     private static double lastMspt;
     private static long lastSummaryLogTick = Long.MIN_VALUE;
+    private static RuntimeMode currentMode = RuntimeMode.OFF;
     private static TickCounters counters = new TickCounters();
     private static TickCounters lastCounters = new TickCounters();
 
@@ -44,15 +48,19 @@ public final class LeafstormSchedulerReplacement {
         serverTickIndex++;
         lastMspt = previousMspt;
         counters = new TickCounters();
-        if (!configured()) {
+        RuntimeMode mode = runtimeMode();
+        if (mode != currentMode) {
             clear();
-            currentGlobalBudget = 0;
-            return;
+            currentMode = mode;
         }
-        currentGlobalBudget = globalBudgetFor(previousMspt);
+        currentGlobalBudget = mode == RuntimeMode.ACTIVE ? globalBudgetFor(previousMspt) : 0;
+        currentScanBudget = mode == RuntimeMode.OFF ? 0 : scanBudgetFor(previousMspt);
+        remainingExecutionBudget = currentGlobalBudget;
+        remainingScanBudget = currentScanBudget;
         counters.globalBudget = currentGlobalBudget;
+        counters.scanBudget = currentScanBudget;
         counters.perChunkBudget = LeafstormConfig.VALUES.schedulerPerChunkBudget.get();
-        counters.shadowMode = shadowMode();
+        counters.mode = mode;
     }
 
     public static void onServerTickEnd(MinecraftServer server) {
@@ -63,7 +71,8 @@ public final class LeafstormSchedulerReplacement {
     }
 
     public static ScheduleDecision beforeSchedule(Object tickAccess, ScheduledTick<?> tick) {
-        if (tick == null || !configured() || !LeafstormConfig.VALUES.schedulerInterceptVanillaLeafSchedules.get()) {
+        RuntimeMode mode = currentMode;
+        if (tick == null || mode == RuntimeMode.OFF) {
             return ScheduleDecision.PASS_THROUGH;
         }
         Object type = tick.type();
@@ -79,12 +88,23 @@ public final class LeafstormSchedulerReplacement {
         counters.incrementChunk(chunkKey(pos));
         CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_VANILLA_LEAF_INTERCEPTED);
 
-        if (shadowMode()) {
+        LeafScheduler scheduler = SCHEDULERS.computeIfAbsent(tickAccess, ignored -> new LeafScheduler());
+        rememberJob(scheduler, type, pos, tick, mode == RuntimeMode.ACTIVE);
+
+        if (mode == RuntimeMode.SHADOW) {
             counters.shadowIntercepted++;
             return ScheduleDecision.RECORDED_PASS_THROUGH;
         }
 
-        LeafScheduler scheduler = SCHEDULERS.computeIfAbsent(tickAccess, ignored -> new LeafScheduler());
+        return ScheduleDecision.CANCEL_VANILLA;
+    }
+
+    public static boolean activeReplacement() {
+        return currentMode == RuntimeMode.ACTIVE;
+    }
+
+    private static void rememberJob(LeafScheduler scheduler, Object type, BlockPos pos, ScheduledTick<?> tick, boolean recordSchedulerOrigin) {
+        String blockId = blockId((Block)type);
         LeafKey key = new LeafKey(blockId, pos.asLong());
         LeafJob existing = scheduler.jobsByKey.get(key);
         if (existing == null) {
@@ -93,9 +113,12 @@ public final class LeafstormSchedulerReplacement {
             scheduler.dueHeap.add(new HeapEntry(key, job.dueTick, job.priority, job.subTickOrder, job.version, sequence++));
             totalJobs++;
             counters.enqueued++;
-            CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_SCHEDULER_ENQUEUED);
+            if (recordSchedulerOrigin) {
+                CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_SCHEDULER_ENQUEUED);
+            }
             enforceMaxJobs();
-            return ScheduleDecision.CANCEL_VANILLA;
+            compactHeapIfNeeded(scheduler);
+            return;
         }
 
         existing.touches++;
@@ -108,13 +131,15 @@ public final class LeafstormSchedulerReplacement {
             scheduler.dueHeap.add(new HeapEntry(key, existing.dueTick, existing.priority, existing.subTickOrder, existing.version, sequence++));
         }
         counters.coalesced++;
-        CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_SCHEDULER_COALESCED);
-        return ScheduleDecision.CANCEL_VANILLA;
+        if (recordSchedulerOrigin) {
+            CostRecorder.recordScheduledTick(type, pos, CostRecorder.ORIGIN_SCHEDULER_COALESCED);
+        }
+        compactHeapIfNeeded(scheduler);
     }
 
     @SuppressWarnings("unchecked")
     public static <T> void drain(Object tickAccess, BiConsumer<BlockPos, T> ticker, long gameTime) {
-        if (!active()) {
+        if (!activeReplacement()) {
             return;
         }
         LeafScheduler scheduler = SCHEDULERS.get(tickAccess);
@@ -123,10 +148,24 @@ public final class LeafstormSchedulerReplacement {
         }
 
         scheduler.chunkBudgets.clear();
-        int remainingGlobal = currentGlobalBudget;
+        int remainingExecution = remainingExecutionBudget;
         int perChunkBudget = LeafstormConfig.VALUES.schedulerPerChunkBudget.get();
-        while (remainingGlobal > 0) {
-            LeafJob job = pollReadyJob(scheduler, gameTime);
+        DrainScan scan = new DrainScan(remainingScanBudget);
+        long drainBudgetNanos = (long)(LeafstormConfig.VALUES.schedulerMaxDrainMillisPerTick.get() * 1_000_000.0D);
+        long deadlineNanos = drainBudgetNanos <= 0L ? 0L : System.nanoTime() + drainBudgetNanos;
+        while (remainingExecution > 0 && scan.remaining > 0) {
+            if (deadlineNanos > 0L && System.nanoTime() >= deadlineNanos) {
+                counters.drainPaused = true;
+                counters.drainPauseReason = "time_budget";
+                break;
+            }
+            PollResult result = pollReadyJob(scheduler, gameTime, scan);
+            if (result.budgetExhausted()) {
+                counters.drainPaused = true;
+                counters.drainPauseReason = "scan_budget";
+                break;
+            }
+            LeafJob job = result.job();
             if (job == null) {
                 break;
             }
@@ -138,8 +177,7 @@ public final class LeafstormSchedulerReplacement {
             long chunkKey = chunkKey(job.pos);
             int usedInChunk = scheduler.chunkBudgets.getOrDefault(chunkKey, 0);
             if (usedInChunk >= perChunkBudget) {
-                remainingGlobal--;
-                counters.skippedBudget++;
+                counters.skippedHotChunk++;
                 rescheduleForNextTick(scheduler, job, gameTime);
                 CostRecorder.recordScheduledTick(job.type, job.pos, CostRecorder.ORIGIN_SCHEDULER_SKIPPED_BUDGET);
                 continue;
@@ -148,7 +186,8 @@ public final class LeafstormSchedulerReplacement {
             scheduler.jobsByKey.remove(job.key);
             totalJobs--;
             scheduler.chunkBudgets.put(chunkKey, usedInChunk + 1);
-            remainingGlobal--;
+            remainingExecution--;
+            counters.executionBudgetUsed++;
             counters.executed++;
             counters.lastBlockId = job.key.blockId();
             counters.incrementLeaf(job.key.blockId());
@@ -157,10 +196,12 @@ public final class LeafstormSchedulerReplacement {
             ticker.accept(job.pos, (T)job.type);
         }
 
-        if (remainingGlobal <= 0 && hasReadyJob(scheduler, gameTime)) {
-            counters.skippedBudget += Math.max(1, readyJobCount(scheduler, gameTime, 16));
+        counters.scanBudgetUsed += remainingScanBudget - scan.remaining;
+        remainingExecutionBudget = remainingExecution;
+        remainingScanBudget = scan.remaining;
+        if (!counters.drainPaused) {
+            compactHeapIfNeeded(scheduler);
         }
-        compactHeapIfNeeded(scheduler);
         if (scheduler.jobsByKey.isEmpty()) {
             SCHEDULERS.remove(tickAccess);
         }
@@ -170,34 +211,50 @@ public final class LeafstormSchedulerReplacement {
         TickCounters snapshot = lastCounters;
         return new Status(
                 configured(),
-                active(),
-                snapshot.shadowMode,
+                activeReplacement(),
+                snapshot.mode == RuntimeMode.SHADOW,
                 totalJobs,
                 snapshot.heapEntries,
                 snapshot.globalBudget,
+                snapshot.scanBudget,
+                snapshot.executionBudgetUsed,
+                snapshot.scanBudgetUsed,
                 snapshot.perChunkBudget,
                 snapshot.intercepted,
                 snapshot.shadowIntercepted,
                 snapshot.enqueued,
                 snapshot.coalesced,
                 snapshot.executed,
-                snapshot.skippedBudget,
+                snapshot.skippedHotChunk,
                 snapshot.droppedStale,
+                snapshot.droppedOverflow,
+                snapshot.drainPaused,
+                snapshot.drainPauseReason,
                 snapshot.topLeaves(),
                 snapshot.topChunks()
         );
+    }
+
+    public static void clearForServerStop() {
+        clear();
+        currentMode = RuntimeMode.OFF;
+        currentGlobalBudget = 0;
+        currentScanBudget = 0;
+        remainingExecutionBudget = 0;
+        remainingScanBudget = 0;
+        counters = new TickCounters();
+        lastCounters = new TickCounters();
     }
 
     private static boolean configured() {
         return LeafstormConfig.VALUES.schedulerEnabled.get();
     }
 
-    private static boolean shadowMode() {
-        return LeafstormConfig.VALUES.schedulerShadowMode.get();
-    }
-
-    private static boolean active() {
-        return configured() && !shadowMode();
+    private static RuntimeMode runtimeMode() {
+        if (!configured() || !LeafstormConfig.VALUES.schedulerInterceptVanillaLeafSchedules.get()) {
+            return RuntimeMode.OFF;
+        }
+        return LeafstormConfig.VALUES.schedulerShadowMode.get() ? RuntimeMode.SHADOW : RuntimeMode.ACTIVE;
     }
 
     private static int globalBudgetFor(double mspt) {
@@ -217,8 +274,26 @@ public final class LeafstormSchedulerReplacement {
         return Math.min(4, Math.max(0, configuredBudget / 16));
     }
 
-    private static LeafJob pollReadyJob(LeafScheduler scheduler, long gameTime) {
+    private static int scanBudgetFor(double mspt) {
+        int configuredBudget = LeafstormConfig.VALUES.schedulerScanBudget.get();
+        if (mspt < LeafstormConfig.VALUES.schedulerHealthyMsptThreshold.get()) {
+            return Math.min(262_144, Math.max(configuredBudget, configuredBudget * 2));
+        }
+        if (mspt < LeafstormConfig.VALUES.schedulerSoftMsptThreshold.get()) {
+            return configuredBudget;
+        }
+        if (mspt < LeafstormConfig.VALUES.schedulerHardMsptThreshold.get()) {
+            return Math.max(1, configuredBudget / 2);
+        }
+        return Math.max(1, configuredBudget / 8);
+    }
+
+    private static PollResult pollReadyJob(LeafScheduler scheduler, long gameTime, DrainScan scan) {
         while (!scheduler.dueHeap.isEmpty()) {
+            if (scan.remaining <= 0) {
+                return PollResult.BUDGET_EXHAUSTED;
+            }
+            scan.remaining--;
             HeapEntry entry = scheduler.dueHeap.peek();
             LeafJob job = scheduler.jobsByKey.get(entry.key());
             if (job == null || job.version != entry.version() || job.dueTick != entry.dueTick()) {
@@ -226,30 +301,12 @@ public final class LeafstormSchedulerReplacement {
                 continue;
             }
             if (entry.dueTick() > gameTime) {
-                return null;
+                return PollResult.NOT_READY;
             }
             scheduler.dueHeap.poll();
-            return job;
+            return new PollResult(job, false);
         }
-        return null;
-    }
-
-    private static boolean hasReadyJob(LeafScheduler scheduler, long gameTime) {
-        return readyJobCount(scheduler, gameTime, 1) > 0;
-    }
-
-    private static int readyJobCount(LeafScheduler scheduler, long gameTime, int limit) {
-        int ready = 0;
-        for (HeapEntry entry : scheduler.dueHeap) {
-            LeafJob job = scheduler.jobsByKey.get(entry.key());
-            if (job != null && job.version == entry.version() && job.dueTick == entry.dueTick() && entry.dueTick() <= gameTime) {
-                ready++;
-                if (ready >= limit) {
-                    break;
-                }
-            }
-        }
-        return ready;
+        return PollResult.NOT_READY;
     }
 
     private static void rescheduleForNextTick(LeafScheduler scheduler, LeafJob job, long gameTime) {
@@ -270,7 +327,7 @@ public final class LeafstormSchedulerReplacement {
     }
 
     private static void compactHeapIfNeeded(LeafScheduler scheduler) {
-        if (scheduler.dueHeap.size() <= Math.max(64, scheduler.jobsByKey.size() * 3)) {
+        if (scheduler.dueHeap.size() <= Math.max(4_096, scheduler.jobsByKey.size() * 4)) {
             return;
         }
         PriorityQueue<HeapEntry> compacted = new PriorityQueue<>(HeapEntry.ORDERING);
@@ -293,8 +350,8 @@ public final class LeafstormSchedulerReplacement {
                 LeafJob job = jobs.next();
                 jobs.remove();
                 totalJobs--;
-                counters.droppedStale++;
-                CostRecorder.recordScheduledTick(job.type, job.pos, CostRecorder.ORIGIN_SCHEDULER_DROPPED_STALE);
+                counters.droppedOverflow++;
+                CostRecorder.recordScheduledTick(job.type, job.pos, CostRecorder.ORIGIN_SCHEDULER_DROPPED_OVERFLOW);
             }
             if (scheduler.jobsByKey.isEmpty()) {
                 outer.remove();
@@ -326,18 +383,23 @@ public final class LeafstormSchedulerReplacement {
         lastSummaryLogTick = serverTickIndex;
         if (LeafstormConfig.VALUES.consoleLogging.get()) {
             FragmentDoctor.LOGGER.warn(
-                    "Leafstorm scheduler: active={} shadow={} intercepted={} enqueued={} coalesced={} executed={} skipped_budget={} dropped_stale={} pending={} budget={} per_chunk={} mspt={} top_leaves={} top_chunks={}",
-                    active(),
-                    shadowMode(),
+                    "Leafstorm scheduler: mode={} intercepted={} enqueued={} coalesced={} executed={} skipped_hot_chunk={} dropped_stale={} dropped_overflow={} pending={} execution_budget={} scan_budget={} execution_used={} scan_used={} per_chunk={} paused={} pause_reason={} mspt={} top_leaves={} top_chunks={}",
+                    currentMode.logName,
                     counters.intercepted,
                     counters.enqueued,
                     counters.coalesced,
                     counters.executed,
-                    counters.skippedBudget,
+                    counters.skippedHotChunk,
                     counters.droppedStale,
+                    counters.droppedOverflow,
                     totalJobs,
                     currentGlobalBudget,
+                    currentScanBudget,
+                    counters.executionBudgetUsed,
+                    counters.scanBudgetUsed,
                     LeafstormConfig.VALUES.schedulerPerChunkBudget.get(),
+                    counters.drainPaused,
+                    counters.drainPauseReason,
                     String.format(Locale.ROOT, "%.2f", lastMspt),
                     counters.topLeaves(),
                     counters.topChunks()
@@ -353,18 +415,25 @@ public final class LeafstormSchedulerReplacement {
         summary.addProperty("schema", "fragmentdoctor.leafstorm_scheduler.v1");
         summary.addProperty("event", "leafstorm_scheduler_tick");
         summary.addProperty("server_tick", server.getTickCount());
-        summary.addProperty("active", active());
-        summary.addProperty("shadow_mode", shadowMode());
+        summary.addProperty("mode", currentMode.logName);
+        summary.addProperty("active", activeReplacement());
+        summary.addProperty("shadow_mode", currentMode == RuntimeMode.SHADOW);
         summary.addProperty("last_mspt", lastMspt);
         summary.addProperty("global_budget", currentGlobalBudget);
+        summary.addProperty("scan_budget", currentScanBudget);
+        summary.addProperty("execution_budget_used", counters.executionBudgetUsed);
+        summary.addProperty("scan_budget_used", counters.scanBudgetUsed);
         summary.addProperty("per_chunk_budget", LeafstormConfig.VALUES.schedulerPerChunkBudget.get());
         summary.addProperty("intercepted", counters.intercepted);
         summary.addProperty("shadow_intercepted", counters.shadowIntercepted);
         summary.addProperty("enqueued", counters.enqueued);
         summary.addProperty("coalesced", counters.coalesced);
         summary.addProperty("executed", counters.executed);
-        summary.addProperty("skipped_budget", counters.skippedBudget);
+        summary.addProperty("skipped_hot_chunk", counters.skippedHotChunk);
         summary.addProperty("dropped_stale", counters.droppedStale);
+        summary.addProperty("dropped_overflow", counters.droppedOverflow);
+        summary.addProperty("drain_paused", counters.drainPaused);
+        summary.addProperty("drain_pause_reason", counters.drainPauseReason);
         summary.addProperty("pending_jobs", totalJobs);
         summary.addProperty("heap_entries", heapEntries());
         summary.addProperty("top_leaves", counters.topLeaves());
@@ -415,6 +484,18 @@ public final class LeafstormSchedulerReplacement {
         return chunkX + "," + chunkZ;
     }
 
+    private enum RuntimeMode {
+        OFF("off"),
+        SHADOW("shadow"),
+        ACTIVE("active");
+
+        private final String logName;
+
+        RuntimeMode(String logName) {
+            this.logName = logName;
+        }
+    }
+
     public enum ScheduleDecision {
         PASS_THROUGH(false, false),
         RECORDED_PASS_THROUGH(true, false),
@@ -441,6 +522,19 @@ public final class LeafstormSchedulerReplacement {
         private final Map<LeafKey, LeafJob> jobsByKey = new LinkedHashMap<>();
         private PriorityQueue<HeapEntry> dueHeap = new PriorityQueue<>(HeapEntry.ORDERING);
         private final Map<Long, Integer> chunkBudgets = new HashMap<>();
+    }
+
+    private static final class DrainScan {
+        private int remaining;
+
+        private DrainScan(int remaining) {
+            this.remaining = remaining;
+        }
+    }
+
+    private record PollResult(LeafJob job, boolean budgetExhausted) {
+        private static final PollResult NOT_READY = new PollResult(null, false);
+        private static final PollResult BUDGET_EXHAUSTED = new PollResult(null, true);
     }
 
     private static final class LeafJob {
@@ -479,16 +573,22 @@ public final class LeafstormSchedulerReplacement {
     }
 
     private static final class TickCounters {
-        private boolean shadowMode;
+        private RuntimeMode mode = RuntimeMode.OFF;
         private int globalBudget;
+        private int scanBudget;
+        private int executionBudgetUsed;
+        private int scanBudgetUsed;
         private int perChunkBudget;
         private int intercepted;
         private int shadowIntercepted;
         private int enqueued;
         private int coalesced;
         private int executed;
-        private int skippedBudget;
+        private int skippedHotChunk;
         private int droppedStale;
+        private int droppedOverflow;
+        private boolean drainPaused;
+        private String drainPauseReason = "none";
         private int pendingJobs;
         private int heapEntries;
         private String lastBlockId = "unknown";
@@ -504,7 +604,7 @@ public final class LeafstormSchedulerReplacement {
         }
 
         private int events() {
-            return intercepted + enqueued + coalesced + executed + skippedBudget + droppedStale;
+            return intercepted + enqueued + coalesced + executed + skippedHotChunk + droppedStale + droppedOverflow;
         }
 
         private String topLeaves() {
@@ -531,16 +631,22 @@ public final class LeafstormSchedulerReplacement {
 
         private TickCounters copy() {
             TickCounters copy = new TickCounters();
-            copy.shadowMode = shadowMode;
+            copy.mode = mode;
             copy.globalBudget = globalBudget;
+            copy.scanBudget = scanBudget;
+            copy.executionBudgetUsed = executionBudgetUsed;
+            copy.scanBudgetUsed = scanBudgetUsed;
             copy.perChunkBudget = perChunkBudget;
             copy.intercepted = intercepted;
             copy.shadowIntercepted = shadowIntercepted;
             copy.enqueued = enqueued;
             copy.coalesced = coalesced;
             copy.executed = executed;
-            copy.skippedBudget = skippedBudget;
+            copy.skippedHotChunk = skippedHotChunk;
             copy.droppedStale = droppedStale;
+            copy.droppedOverflow = droppedOverflow;
+            copy.drainPaused = drainPaused;
+            copy.drainPauseReason = drainPauseReason;
             copy.pendingJobs = pendingJobs;
             copy.heapEntries = heapEntries;
             copy.lastBlockId = lastBlockId;
@@ -557,14 +663,20 @@ public final class LeafstormSchedulerReplacement {
             int pendingJobs,
             int heapEntries,
             int globalBudget,
+            int scanBudget,
+            int executionBudgetUsed,
+            int scanBudgetUsed,
             int perChunkBudget,
             int intercepted,
             int shadowIntercepted,
             int enqueued,
             int coalesced,
             int executed,
-            int skippedBudget,
+            int skippedHotChunk,
             int droppedStale,
+            int droppedOverflow,
+            boolean drainPaused,
+            String drainPauseReason,
             String topLeaves,
             String topChunks
     ) {

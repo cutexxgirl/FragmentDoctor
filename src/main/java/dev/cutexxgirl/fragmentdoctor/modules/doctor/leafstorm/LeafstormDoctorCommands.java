@@ -37,8 +37,9 @@ public final class LeafstormDoctorCommands {
                 + " seen=" + status.seenLeaves()
                 + " allowed=" + status.allowedLeaves()
                 + " deferred=" + status.deferredLeaves()
+                + " drained=" + status.drainedDeferredLeaves()
                 + " deduped=" + status.deduplicatedLeaves()
-                + " dedup_keys=" + status.dedupKeyCount()
+                + " deferred_queue=" + status.deferredQueueSize()
                 + " top_leaves=" + status.topLeaves()), false);
         return status.enabled() ? 1 : 0;
     }

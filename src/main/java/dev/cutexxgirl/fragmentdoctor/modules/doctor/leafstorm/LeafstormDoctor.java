@@ -49,6 +49,7 @@ public final class LeafstormDoctor {
     }
 
     public static void onServerTickStart(MinecraftServer server) {
+        LeafstormSchedulerReplacement.onServerTickStart(lastMspt);
         serverTickIndex++;
         tickStartNanos = System.nanoTime();
         previousTickQueueDepth = lastTickQueueDepth;
@@ -72,6 +73,7 @@ public final class LeafstormDoctor {
         lastTickQueueDepth = Math.max(observedQueueDepthThisTick, counters.lastQueueDepth);
         queueTrend = trendFor(previousTickQueueDepth, lastTickQueueDepth);
         lastCounters = counters.copy();
+        LeafstormSchedulerReplacement.onServerTickEnd(server);
         writeSummaryIfNeeded(server);
     }
 
@@ -188,7 +190,8 @@ public final class LeafstormDoctor {
                 snapshot.skippedDeferredDrains,
                 snapshot.deduplicatedLeaves,
                 deferredQueueSize,
-                snapshot.topLeaves()
+                snapshot.topLeaves(),
+                LeafstormSchedulerReplacement.status()
         );
     }
 
@@ -618,7 +621,8 @@ public final class LeafstormDoctor {
             int skippedDeferredDrains,
             int deduplicatedLeaves,
             int deferredQueueSize,
-            String topLeaves
+            String topLeaves,
+            LeafstormSchedulerReplacement.Status scheduler
     ) {
     }
 }

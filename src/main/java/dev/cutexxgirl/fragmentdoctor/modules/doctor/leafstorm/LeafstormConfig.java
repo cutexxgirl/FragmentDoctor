@@ -46,6 +46,17 @@ public final class LeafstormConfig {
         public final ModConfigSpec.IntValue logEveryTicks;
         public final ModConfigSpec.BooleanValue consoleLogging;
         public final ModConfigSpec.BooleanValue fileLogging;
+        public final ModConfigSpec.BooleanValue schedulerEnabled;
+        public final ModConfigSpec.BooleanValue schedulerShadowMode;
+        public final ModConfigSpec.BooleanValue schedulerInterceptVanillaLeafSchedules;
+        public final ModConfigSpec.IntValue schedulerGlobalBudget;
+        public final ModConfigSpec.IntValue schedulerPerChunkBudget;
+        public final ModConfigSpec.DoubleValue schedulerHealthyMsptThreshold;
+        public final ModConfigSpec.DoubleValue schedulerSoftMsptThreshold;
+        public final ModConfigSpec.DoubleValue schedulerHardMsptThreshold;
+        public final ModConfigSpec.IntValue schedulerMaxJobs;
+        public final ModConfigSpec.IntValue schedulerJobTtlTicks;
+        public final ModConfigSpec.IntValue schedulerLogEveryTicks;
 
         private Values(ModConfigSpec.Builder builder) {
             builder.push("doctor");
@@ -110,6 +121,41 @@ public final class LeafstormConfig {
             fileLogging = builder
                     .comment("Write JSONL limiter summaries under fragmentdoctor/doctor/leafstorm.")
                     .define("fileLogging", true);
+            builder.push("scheduler");
+            schedulerEnabled = builder
+                    .comment("Enable the replacement scheduler for leaf scheduled ticks. Shadow mode observes without cancelling vanilla.")
+                    .define("enabled", false);
+            schedulerShadowMode = builder
+                    .comment("When true, record what would be intercepted but leave vanilla scheduling untouched.")
+                    .define("shadowMode", true);
+            schedulerInterceptVanillaLeafSchedules = builder
+                    .comment("Intercept LeavesBlock scheduled ticks at LevelTicks.schedule when the replacement scheduler is enabled.")
+                    .define("interceptVanillaLeafSchedules", true);
+            schedulerGlobalBudget = builder
+                    .comment("Normal global leaf scheduler jobs executed per server tick.")
+                    .defineInRange("globalBudget", 64, 0, 65_536);
+            schedulerPerChunkBudget = builder
+                    .comment("Maximum replacement scheduler leaf jobs executed from one chunk per server tick.")
+                    .defineInRange("perChunkBudget", 8, 1, 65_536);
+            schedulerHealthyMsptThreshold = builder
+                    .comment("Below this previous-tick MSPT, the scheduler may use recovery budget.")
+                    .defineInRange("healthyMsptThreshold", 30.0D, 1.0D, 5000.0D);
+            schedulerSoftMsptThreshold = builder
+                    .comment("At or above this previous-tick MSPT, the scheduler slows down.")
+                    .defineInRange("softMsptThreshold", 45.0D, 1.0D, 5000.0D);
+            schedulerHardMsptThreshold = builder
+                    .comment("At or above this previous-tick MSPT, the scheduler pauses or drains only a tiny amount.")
+                    .defineInRange("hardMsptThreshold", 70.0D, 1.0D, 5000.0D);
+            schedulerMaxJobs = builder
+                    .comment("Maximum canonical leaf jobs retained across all replacement scheduler queues.")
+                    .defineInRange("maxJobs", 250_000, 1_000, 2_000_000);
+            schedulerJobTtlTicks = builder
+                    .comment("Drop replacement scheduler jobs older than this many game ticks.")
+                    .defineInRange("jobTtlTicks", 20 * 120, 20, 20 * 60 * 30);
+            schedulerLogEveryTicks = builder
+                    .comment("Minimum server ticks between repeated replacement scheduler summary log lines.")
+                    .defineInRange("logEveryTicks", 100, 1, 20 * 60);
+            builder.pop();
             builder.pop();
             builder.pop();
         }

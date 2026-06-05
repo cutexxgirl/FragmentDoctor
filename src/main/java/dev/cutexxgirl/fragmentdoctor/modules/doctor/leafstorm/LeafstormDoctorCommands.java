@@ -27,6 +27,7 @@ public final class LeafstormDoctorCommands {
 
     private static int status(CommandSourceStack source) {
         LeafstormDoctor.Status status = LeafstormDoctor.status();
+        LeafstormSchedulerReplacement.Status scheduler = status.scheduler();
         source.sendSuccess(() -> Component.literal("[Fragment Doctor] leafstorm limiter enabled=" + status.enabled()
                 + " mode=" + status.mode()
                 + " trend=" + status.queueTrend()
@@ -45,8 +46,23 @@ public final class LeafstormDoctorCommands {
                 + " skipped_drain=" + status.skippedDeferredDrains()
                 + " deduped=" + status.deduplicatedLeaves()
                 + " deferred_queue=" + status.deferredQueueSize()
-                + " top_leaves=" + status.topLeaves()), false);
-        return status.enabled() ? 1 : 0;
+                + " top_leaves=" + status.topLeaves()
+                + " scheduler_configured=" + scheduler.configured()
+                + " scheduler_active=" + scheduler.active()
+                + " scheduler_shadow=" + scheduler.shadowMode()
+                + " scheduler_pending=" + scheduler.pendingJobs()
+                + " scheduler_heap=" + scheduler.heapEntries()
+                + " scheduler_budget=" + scheduler.globalBudget()
+                + " scheduler_per_chunk=" + scheduler.perChunkBudget()
+                + " scheduler_intercepted=" + scheduler.intercepted()
+                + " scheduler_enqueued=" + scheduler.enqueued()
+                + " scheduler_coalesced=" + scheduler.coalesced()
+                + " scheduler_executed=" + scheduler.executed()
+                + " scheduler_skipped_budget=" + scheduler.skippedBudget()
+                + " scheduler_dropped_stale=" + scheduler.droppedStale()
+                + " scheduler_top_leaves=" + scheduler.topLeaves()
+                + " scheduler_top_chunks=" + scheduler.topChunks()), false);
+        return status.enabled() || scheduler.configured() ? 1 : 0;
     }
 
     private static int setEnabled(CommandSourceStack source, boolean enabled) {

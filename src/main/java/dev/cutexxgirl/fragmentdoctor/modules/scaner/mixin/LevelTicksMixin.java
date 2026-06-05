@@ -1,6 +1,7 @@
 package dev.cutexxgirl.fragmentdoctor.modules.scaner.mixin;
 
 import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormDoctor;
+import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormSchedulerReplacement;
 import dev.cutexxgirl.fragmentdoctor.modules.scaner.instrumentation.CostRecorder;
 import java.util.function.BiConsumer;
 import net.minecraft.core.BlockPos;
@@ -23,9 +24,14 @@ public abstract class LevelTicksMixin<T> {
     @Shadow
     public abstract int count();
 
-    @Inject(method = "schedule", at = @At("HEAD"))
+    @Inject(method = "schedule", at = @At("HEAD"), cancellable = true)
     private void fragmentdoctor$scheduledTickEnqueued(ScheduledTick<T> tick, CallbackInfo ci) {
-        if (CostRecorder.active() && tick != null) {
+        LeafstormSchedulerReplacement.ScheduleDecision decision = LeafstormSchedulerReplacement.beforeSchedule(this, tick);
+        if (decision.cancelVanilla()) {
+            ci.cancel();
+            return;
+        }
+        if (!decision.scannerRecorded() && CostRecorder.active() && tick != null) {
             CostRecorder.recordScheduledTick(tick.type(), tick.pos());
         }
     }
@@ -38,6 +44,7 @@ public abstract class LevelTicksMixin<T> {
 
     @Inject(method = "runCollectedTicks", at = @At("HEAD"))
     private void fragmentdoctor$drainDeferredLeafTicks(BiConsumer<BlockPos, T> ticker, CallbackInfo ci) {
+        LeafstormSchedulerReplacement.drain(this, ticker, fragmentdoctor$gameTime);
         LeafstormDoctor.drainDeferredTicks(this, ticker, fragmentdoctor$queueDepth, fragmentdoctor$gameTime);
     }
 

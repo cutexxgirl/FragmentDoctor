@@ -1,6 +1,7 @@
 package dev.cutexxgirl.fragmentdoctor;
 
 import dev.cutexxgirl.fragmentdoctor.modules.DoctorModule;
+import dev.cutexxgirl.fragmentdoctor.modules.doctor.create.CreateSmootherModule;
 import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormConfig;
 import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormDoctorModule;
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.ScannerModule;
@@ -20,6 +21,7 @@ public final class FragmentDoctor {
 
     private final List<DoctorModule> modules = List.of(
             new LeafstormDoctorModule(),
+            new CreateSmootherModule(),
             new ScannerModule()
     );
 

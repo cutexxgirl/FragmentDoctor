@@ -1,5 +1,9 @@
 package dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm;
 
+import com.electronwill.nightconfig.core.file.CommentedFileConfig;
+import dev.cutexxgirl.fragmentdoctor.FragmentDoctor;
+import java.nio.file.Path;
+import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.ModConfigSpec;
 import org.apache.commons.lang3.tuple.Pair;
 
@@ -21,11 +25,41 @@ public final class LeafstormConfig {
     }
 
     public static void setEnabled(boolean enabled) {
+        refreshMutableValuesFromDisk();
         VALUES.schedulerEnabled.set(enabled);
         if (enabled) {
             VALUES.schedulerShadowMode.set(false);
         }
         SPEC.save();
+    }
+
+    public static void setCreateSmootherEnabled(boolean enabled) {
+        refreshMutableValuesFromDisk();
+        VALUES.createSmootherEnabled.set(enabled);
+        SPEC.save();
+    }
+
+    private static void refreshMutableValuesFromDisk() {
+        Path path = FMLPaths.CONFIGDIR.get().resolve("fragmentdoctor-common.toml");
+        if (!path.toFile().isFile()) {
+            return;
+        }
+        try (CommentedFileConfig config = CommentedFileConfig.builder(path).sync().build()) {
+            config.load();
+            refreshBoolean(config, "doctor.leafstorm.scheduler.enabled", VALUES.schedulerEnabled);
+            refreshBoolean(config, "doctor.leafstorm.scheduler.shadowMode", VALUES.schedulerShadowMode);
+            refreshBoolean(config, "doctor.leafstorm.scheduler.interceptVanillaLeafSchedules", VALUES.schedulerInterceptVanillaLeafSchedules);
+            refreshBoolean(config, "doctor.leafstorm.createSmoother.enabled", VALUES.createSmootherEnabled);
+        } catch (RuntimeException exception) {
+            FragmentDoctor.LOGGER.warn("Failed to refresh Fragment Doctor config from disk before saving {}", path, exception);
+        }
+    }
+
+    private static void refreshBoolean(CommentedFileConfig config, String path, ModConfigSpec.BooleanValue value) {
+        Object current = config.get(path);
+        if (current instanceof Boolean booleanValue) {
+            value.set(booleanValue);
+        }
     }
 
     public static final class Values {
@@ -47,6 +81,13 @@ public final class LeafstormConfig {
         public final ModConfigSpec.IntValue schedulerHotChunkDelayTicks;
         public final ModConfigSpec.IntValue schedulerHotChunkMaxDelayTicks;
         public final ModConfigSpec.IntValue schedulerLogEveryTicks;
+        public final ModConfigSpec.BooleanValue createSmootherEnabled;
+        public final ModConfigSpec.IntValue createSmootherBlockEntityBudget;
+        public final ModConfigSpec.IntValue createSmootherEntityBudget;
+        public final ModConfigSpec.IntValue createSmootherWarmupTicks;
+        public final ModConfigSpec.IntValue createSmootherMaxConsecutiveSkips;
+        public final ModConfigSpec.DoubleValue createSmootherMsptThreshold;
+        public final ModConfigSpec.IntValue createSmootherLogEveryTicks;
 
         private Values(ModConfigSpec.Builder builder) {
             builder.push("doctor");
@@ -105,6 +146,29 @@ public final class LeafstormConfig {
                     .defineInRange("hotChunkMaxDelayTicks", 20 * 10, 1, 20 * 60 * 10);
             schedulerLogEveryTicks = builder
                     .comment("Minimum server ticks between repeated replacement scheduler summary log lines.")
+                    .defineInRange("logEveryTicks", 100, 1, 20 * 60);
+            builder.pop();
+            builder.push("createSmoother");
+            createSmootherEnabled = builder
+                    .comment("Smooth newly loaded Create block entities and contraption entities by skipping some early ticks under MSPT pressure.")
+                    .define("enabled", false);
+            createSmootherBlockEntityBudget = builder
+                    .comment("Maximum newly loaded Create block entity ticks allowed per server tick while smoothing.")
+                    .defineInRange("blockEntityBudget", 32, 0, 65_536);
+            createSmootherEntityBudget = builder
+                    .comment("Maximum newly loaded Create entity ticks allowed per server tick while smoothing.")
+                    .defineInRange("entityBudget", 8, 0, 65_536);
+            createSmootherWarmupTicks = builder
+                    .comment("Only Create objects first seen within this many server ticks are smoothed.")
+                    .defineInRange("warmupTicks", 20 * 10, 1, 20 * 60 * 10);
+            createSmootherMaxConsecutiveSkips = builder
+                    .comment("Force one real tick after this many skipped ticks for the same Create object.")
+                    .defineInRange("maxConsecutiveSkips", 4, 0, 200);
+            createSmootherMsptThreshold = builder
+                    .comment("Only smooth Create ticks when previous server tick MSPT is at least this value.")
+                    .defineInRange("msptThreshold", 35.0D, 1.0D, 5000.0D);
+            createSmootherLogEveryTicks = builder
+                    .comment("Minimum server ticks between repeated Create smoother summary log lines.")
                     .defineInRange("logEveryTicks", 100, 1, 20 * 60);
             builder.pop();
             builder.pop();

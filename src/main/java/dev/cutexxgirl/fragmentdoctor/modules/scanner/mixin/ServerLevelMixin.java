@@ -1,5 +1,6 @@
 package dev.cutexxgirl.fragmentdoctor.modules.scanner.mixin;
 
+import dev.cutexxgirl.fragmentdoctor.modules.doctor.create.CreateSmoother;
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.CostRecorder;
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.ObservedTarget;
 import java.util.function.BooleanSupplier;
@@ -31,9 +32,13 @@ public abstract class ServerLevelMixin {
     @Inject(method = "tick", at = @At("TAIL"))
     private void fragmentdoctor$levelTickEnd(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         if (CostRecorder.active() && fragmentdoctor$levelTickStart != 0L) {
-            ServerLevel level = (ServerLevel)(Object)this;
-            CostRecorder.record("section_cost", "level_tick", ObservedTarget.level(level), System.nanoTime() - fragmentdoctor$levelTickStart);
+            long duration = System.nanoTime() - fragmentdoctor$levelTickStart;
             fragmentdoctor$levelTickStart = 0L;
+            if (!CostRecorder.shouldRecord("section_cost", "level_tick", duration)) {
+                return;
+            }
+            ServerLevel level = (ServerLevel)(Object)this;
+            CostRecorder.record("section_cost", "level_tick", ObservedTarget.level(level), duration);
         }
     }
 
@@ -47,14 +52,23 @@ public abstract class ServerLevelMixin {
     @Inject(method = "tickChunk", at = @At("TAIL"))
     private void fragmentdoctor$chunkTickEnd(LevelChunk chunk, int randomTickSpeed, CallbackInfo ci) {
         if (CostRecorder.active() && fragmentdoctor$chunkTickStart != 0L) {
-            ServerLevel level = (ServerLevel)(Object)this;
-            CostRecorder.record("section_cost", "chunk_tick", ObservedTarget.chunk(level, chunk), System.nanoTime() - fragmentdoctor$chunkTickStart);
+            long duration = System.nanoTime() - fragmentdoctor$chunkTickStart;
             fragmentdoctor$chunkTickStart = 0L;
+            if (!CostRecorder.shouldRecord("section_cost", "chunk_tick", duration)) {
+                return;
+            }
+            ServerLevel level = (ServerLevel)(Object)this;
+            CostRecorder.record("section_cost", "chunk_tick", ObservedTarget.chunk(level, chunk), duration);
         }
     }
 
-    @Inject(method = "tickNonPassenger", at = @At("HEAD"))
+    @Inject(method = "tickNonPassenger", at = @At("HEAD"), cancellable = true)
     private void fragmentdoctor$entityTickStart(Entity entity, CallbackInfo ci) {
+        ServerLevel level = (ServerLevel)(Object)this;
+        if (CreateSmoother.shouldSkipEntityTick(level, entity)) {
+            ci.cancel();
+            return;
+        }
         if (CostRecorder.active()) {
             fragmentdoctor$entityTickStart = System.nanoTime();
         }
@@ -63,9 +77,13 @@ public abstract class ServerLevelMixin {
     @Inject(method = "tickNonPassenger", at = @At("TAIL"))
     private void fragmentdoctor$entityTickEnd(Entity entity, CallbackInfo ci) {
         if (CostRecorder.active() && fragmentdoctor$entityTickStart != 0L) {
-            ServerLevel level = (ServerLevel)(Object)this;
-            CostRecorder.record("entity_cost", "entity_tick", ObservedTarget.entity(level, entity), System.nanoTime() - fragmentdoctor$entityTickStart);
+            long duration = System.nanoTime() - fragmentdoctor$entityTickStart;
             fragmentdoctor$entityTickStart = 0L;
+            if (!CostRecorder.shouldRecord("entity_cost", "entity_tick", duration)) {
+                return;
+            }
+            ServerLevel level = (ServerLevel)(Object)this;
+            CostRecorder.record("entity_cost", "entity_tick", ObservedTarget.entity(level, entity), duration);
         }
     }
 }

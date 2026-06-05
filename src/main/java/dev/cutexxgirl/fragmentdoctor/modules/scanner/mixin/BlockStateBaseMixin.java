@@ -27,9 +27,13 @@ public abstract class BlockStateBaseMixin {
     @Inject(method = "tick", at = @At("TAIL"))
     private void fragmentdoctor$blockTickEnd(ServerLevel level, BlockPos pos, RandomSource random, CallbackInfo ci) {
         if (CostRecorder.active() && fragmentdoctor$blockTickStart != 0L) {
-            BlockState state = (BlockState)(Object)this;
-            CostRecorder.record("section_cost", "block_tick", ObservedTarget.blockTick(level, state, pos), System.nanoTime() - fragmentdoctor$blockTickStart);
+            long duration = System.nanoTime() - fragmentdoctor$blockTickStart;
             fragmentdoctor$blockTickStart = 0L;
+            if (!CostRecorder.shouldRecord("section_cost", "block_tick", duration)) {
+                return;
+            }
+            BlockState state = (BlockState)(Object)this;
+            CostRecorder.record("section_cost", "block_tick", ObservedTarget.blockTick(level, state, pos), duration);
         }
     }
 }

@@ -40,8 +40,8 @@ public final class ScannerSession {
     private static final long BLOCK_ENTITY_THRESHOLD_NANOS = 1_000_000L;
     private static final long LEVEL_TICK_THRESHOLD_NANOS = 50_000_000L;
     private static final long CHUNK_TICK_THRESHOLD_NANOS = 5_000_000L;
-    private static final long SAMPLER_INTERVAL_MILLIS = 100L;
-    private static final long SPIKE_THREAD_DUMP_INTERVAL_NANOS = 5_000_000_000L;
+    private static final long SAMPLER_INTERVAL_MILLIS = 250L;
+    private static final long SPIKE_THREAD_DUMP_INTERVAL_NANOS = 10_000_000_000L;
 
     private final String sessionId;
     private final Instant startedAt;

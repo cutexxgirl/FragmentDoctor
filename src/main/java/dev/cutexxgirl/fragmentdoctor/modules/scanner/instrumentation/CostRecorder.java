@@ -27,7 +27,12 @@ public final class CostRecorder {
     private static final long AI_THRESHOLD_NANOS = 250_000L;
     private static final long ENTITY_QUERY_THRESHOLD_NANOS = 250_000L;
     private static final long EVENT_LISTENER_THRESHOLD_NANOS = 500_000L;
-    private static final long RENDER_SECTION_THRESHOLD_NANOS = 2_000_000L;
+    private static final long RENDER_SECTION_THRESHOLD_NANOS = 8_000_000L;
+    private static final long SECTION_THRESHOLD_NANOS = 2_000_000L;
+    private static final long ENTITY_THRESHOLD_NANOS = 1_000_000L;
+    private static final long BLOCK_ENTITY_THRESHOLD_NANOS = 1_000_000L;
+    private static final long LEVEL_TICK_THRESHOLD_NANOS = 50_000_000L;
+    private static final long CHUNK_TICK_THRESHOLD_NANOS = 5_000_000L;
     private static final long CLIENT_FRAME_STACK_THRESHOLD_NANOS = 33_000_000L;
     private static final int EARLY_ATTRIBUTION_SAMPLES = 4;
     private static final int ATTRIBUTION_SAMPLE_INTERVAL = 128;
@@ -44,7 +49,7 @@ public final class CostRecorder {
     }
 
     public static void record(String eventType, String section, ObservedTarget target, long durationNanos) {
-        if (!active()) {
+        if (!active() || !shouldRecord(eventType, section, durationNanos)) {
             return;
         }
         ScannerRuntime.sessions().recordSection(new SectionRecord(
@@ -54,6 +59,24 @@ public final class CostRecorder {
                 AttributionResolver.capture(target.ownerModId()),
                 durationNanos
         ));
+    }
+
+    public static boolean shouldRecord(String eventType, String section, long durationNanos) {
+        if ("level_tick".equals(section)) {
+            return durationNanos >= LEVEL_TICK_THRESHOLD_NANOS;
+        }
+        if ("chunk_tick".equals(section)) {
+            return durationNanos >= CHUNK_TICK_THRESHOLD_NANOS;
+        }
+        return switch (eventType) {
+            case "entity_cost" -> durationNanos >= ENTITY_THRESHOLD_NANOS;
+            case "block_entity_cost" -> durationNanos >= BLOCK_ENTITY_THRESHOLD_NANOS;
+            case "ai_goal_cost", "brain_behavior_cost", "brain_sensor_cost", "navigation_cost" -> durationNanos >= AI_THRESHOLD_NANOS;
+            case "entity_query_cost" -> durationNanos >= ENTITY_QUERY_THRESHOLD_NANOS;
+            case "event_listener_cost" -> durationNanos >= EVENT_LISTENER_THRESHOLD_NANOS;
+            case "render_cost" -> durationNanos >= RENDER_SECTION_THRESHOLD_NANOS;
+            default -> durationNanos >= SECTION_THRESHOLD_NANOS;
+        };
     }
 
     public static void pushScheduledTickOrigin(String origin) {

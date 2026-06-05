@@ -1,5 +1,6 @@
 package dev.cutexxgirl.fragmentdoctor.modules.scanner.mixin;
 
+import dev.cutexxgirl.fragmentdoctor.modules.doctor.create.CreateSmoother;
 import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormSchedulerReplacement;
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.ScannerRuntime;
 import java.util.function.BooleanSupplier;
@@ -15,6 +16,7 @@ public abstract class MinecraftServerMixin {
     private void fragmentdoctor$scannerTickStart(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer)(Object)this;
         LeafstormSchedulerReplacement.onServerTickStart();
+        CreateSmoother.onServerTickStart();
         ScannerRuntime.sessions().onServerTickStart(server);
     }
 
@@ -22,6 +24,7 @@ public abstract class MinecraftServerMixin {
     private void fragmentdoctor$scannerTickEnd(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer)(Object)this;
         ScannerRuntime.sessions().onServerTickEnd(server);
+        CreateSmoother.onServerTickEnd(server);
         LeafstormSchedulerReplacement.onServerTickEnd(server);
     }
 }

@@ -39,7 +39,7 @@ public final class LeafstormConfig {
         SPEC.save();
     }
 
-    private static void refreshMutableValuesFromDisk() {
+    public static void refreshMutableValuesFromDisk() {
         Path path = FMLPaths.CONFIGDIR.get().resolve("fragmentdoctor-common.toml");
         if (!path.toFile().isFile()) {
             return;

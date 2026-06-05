@@ -5,7 +5,6 @@ import dev.cutexxgirl.fragmentdoctor.modules.scaner.instrumentation.CostRecorder
 import java.util.function.BiConsumer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.ticks.ScheduledTick;
-import net.minecraft.world.ticks.TickPriority;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -37,6 +36,11 @@ public abstract class LevelTicksMixin<T> {
         fragmentdoctor$queueDepth = count();
     }
 
+    @Inject(method = "runCollectedTicks", at = @At("HEAD"))
+    private void fragmentdoctor$drainDeferredLeafTicks(BiConsumer<BlockPos, T> ticker, CallbackInfo ci) {
+        LeafstormDoctor.drainDeferredTicks(this, ticker, fragmentdoctor$queueDepth, fragmentdoctor$gameTime);
+    }
+
     @SuppressWarnings("unchecked")
     @Redirect(method = "runCollectedTicks", at = @At(value = "INVOKE", target = "Ljava/util/function/BiConsumer;accept(Ljava/lang/Object;Ljava/lang/Object;)V"))
     private void fragmentdoctor$runOrDeferLeafTick(BiConsumer<BlockPos, T> ticker, Object pos, Object type) {
@@ -50,17 +54,6 @@ public abstract class LevelTicksMixin<T> {
             ticker.accept(blockPos, (T)type);
             return;
         }
-        CostRecorder.pushScheduledTickOrigin(CostRecorder.ORIGIN_DOCTOR_RESCHEDULE);
-        try {
-            schedule(new ScheduledTick<>(
-                    (T)type,
-                    blockPos,
-                    fragmentdoctor$gameTime + decision.delayTicks(),
-                    TickPriority.NORMAL,
-                    LeafstormDoctor.nextDeferredSubTickOrder()
-            ));
-        } finally {
-            CostRecorder.popScheduledTickOrigin();
-        }
+        CostRecorder.recordScheduledTick(type, blockPos, CostRecorder.ORIGIN_DOCTOR_DEFERRED);
     }
 }

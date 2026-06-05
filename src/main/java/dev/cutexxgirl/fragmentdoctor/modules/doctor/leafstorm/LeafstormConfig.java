@@ -34,6 +34,10 @@ public final class LeafstormConfig {
         public final ModConfigSpec.IntValue softBudget;
         public final ModConfigSpec.IntValue hardBudget;
         public final ModConfigSpec.IntValue emergencyBudget;
+        public final ModConfigSpec.IntValue maxDeferredDrainsPerTick;
+        public final ModConfigSpec.DoubleValue maxDeferredDrainMillisPerTick;
+        public final ModConfigSpec.DoubleValue deferredDrainMsptCeiling;
+        public final ModConfigSpec.IntValue deferredDrainQuietLeafTicks;
         public final ModConfigSpec.IntValue deferDelayTicks;
         public final ModConfigSpec.BooleanValue enableDeduplication;
         public final ModConfigSpec.IntValue maxDeferredDedupKeys;
@@ -70,6 +74,18 @@ public final class LeafstormConfig {
             emergencyBudget = builder
                     .comment("Leaf scheduled ticks allowed per server tick in emergency mode.")
                     .defineInRange("emergencyBudget", 250, 1, 65_536);
+            maxDeferredDrainsPerTick = builder
+                    .comment("Maximum deferred leaf ticks the doctor may execute per server tick. Deferred drain is separate from the limiter budget.")
+                    .defineInRange("maxDeferredDrainsPerTick", 16, 0, 65_536);
+            maxDeferredDrainMillisPerTick = builder
+                    .comment("Soft wall-clock budget, in milliseconds, for executing deferred leaf ticks during one server tick.")
+                    .defineInRange("maxDeferredDrainMillisPerTick", 2.0D, 0.0D, 1000.0D);
+            deferredDrainMsptCeiling = builder
+                    .comment("Pause deferred leaf execution when the previous server tick MSPT is at or above this value.")
+                    .defineInRange("deferredDrainMsptCeiling", 40.0D, 1.0D, 5000.0D);
+            deferredDrainQuietLeafTicks = builder
+                    .comment("Pause deferred leaf execution if the previous tick still processed at least this many leaf ticks.")
+                    .defineInRange("deferredDrainQuietLeafTicks", 128, 0, 65_536);
             deferDelayTicks = builder
                     .comment("How many game ticks to delay a leaf tick after the limiter defers it.")
                     .defineInRange("deferDelayTicks", 20, 1, 20 * 60);

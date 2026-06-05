@@ -21,6 +21,7 @@ import net.neoforged.bus.api.EventListener;
 public final class CostRecorder {
     public static final String ORIGIN_VANILLA_SCHEDULE = "vanilla_schedule";
     public static final String ORIGIN_DOCTOR_RESCHEDULE = "doctor_reschedule";
+    public static final String ORIGIN_DOCTOR_DEFERRED = "doctor_deferred";
     public static final String ORIGIN_DOCTOR_DEDUPLICATED = "doctor_deduplicated";
     private static final long AI_THRESHOLD_NANOS = 250_000L;
     private static final long ENTITY_QUERY_THRESHOLD_NANOS = 250_000L;

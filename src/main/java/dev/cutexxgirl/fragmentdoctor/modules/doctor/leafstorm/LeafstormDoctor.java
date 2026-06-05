@@ -6,12 +6,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -34,9 +36,12 @@ public final class LeafstormDoctor {
     private static Mode currentMode = Mode.OFF;
     private static Mode lastLoggedMode = Mode.OFF;
     private static long lastSummaryLogTick = Long.MIN_VALUE;
-    private static long nextDeferredSubTickOrder;
-    private static int deferredDedupKeyCount;
-    private static final Map<Object, LinkedHashMap<DeferredLeafTickKey, Long>> DEFERRED_LEAF_TICKS = new IdentityHashMap<>();
+    private static int deferredQueueSize;
+    private static int currentDrainBudget;
+    private static int remainingDrainBudget;
+    private static boolean drainPaused;
+    private static String drainPauseReason = "none";
+    private static final Map<Object, DeferredLeafTickQueue> DEFERRED_QUEUES = new IdentityHashMap<>();
     private static TickCounters counters = new TickCounters();
     private static TickCounters lastCounters = new TickCounters();
 
@@ -44,6 +49,7 @@ public final class LeafstormDoctor {
     }
 
     public static void onServerTickStart(MinecraftServer server) {
+        LeafstormSchedulerReplacement.onServerTickStart(lastMspt);
         serverTickIndex++;
         tickStartNanos = System.nanoTime();
         previousTickQueueDepth = lastTickQueueDepth;
@@ -52,6 +58,12 @@ public final class LeafstormDoctor {
         currentMode = modeFor(lastMspt, previousTickQueueDepth);
         currentBudget = budgetFor(currentMode);
         remainingBudget = currentBudget;
+        currentDrainBudget = drainBudgetForCurrentTick();
+        remainingDrainBudget = currentDrainBudget;
+        counters.drainBudget = currentDrainBudget;
+        counters.remainingDrainBudget = remainingDrainBudget;
+        counters.drainPaused = drainPaused;
+        counters.drainPauseReason = drainPauseReason;
     }
 
     public static void onServerTickEnd(MinecraftServer server) {
@@ -61,6 +73,7 @@ public final class LeafstormDoctor {
         lastTickQueueDepth = Math.max(observedQueueDepthThisTick, counters.lastQueueDepth);
         queueTrend = trendFor(previousTickQueueDepth, lastTickQueueDepth);
         lastCounters = counters.copy();
+        LeafstormSchedulerReplacement.onServerTickEnd(server);
         writeSummaryIfNeeded(server);
     }
 
@@ -68,7 +81,7 @@ public final class LeafstormDoctor {
         if (!LeafstormConfig.enabled() || !(type instanceof Block block) || !(block instanceof LeavesBlock)) {
             return RUN;
         }
-        observedQueueDepthThisTick = Math.max(observedQueueDepthThisTick, queueDepth);
+        updateLivePressure(queueDepth);
         QueueTrend liveTrend = trendFor(previousTickQueueDepth, observedQueueDepthThisTick);
         Mode liveMode = modeFor(lastMspt, observedQueueDepthThisTick, liveTrend);
         if (liveMode.moreSevereThan(currentMode)) {
@@ -85,7 +98,7 @@ public final class LeafstormDoctor {
         counters.lastBlockId = blockId;
         counters.incrementLeaf(blockId);
 
-        removeExpiredDedupKey(tickAccess, blockId, pos, gameTime);
+        DeferredLeafTickKey key = new DeferredLeafTickKey(blockId, pos.asLong());
         if (currentMode == Mode.OFF) {
             counters.allowedLeaves++;
             return RUN;
@@ -95,18 +108,65 @@ public final class LeafstormDoctor {
             counters.allowedLeaves++;
             return RUN;
         }
-        if (isDuplicateDeferredTick(tickAccess, blockId, pos, gameTime)) {
+        if (isDuplicateDeferredTick(tickAccess, key, gameTime)) {
             counters.deduplicatedLeaves++;
             return new Decision(Action.DEDUPLICATE, 0);
         }
         counters.deferredLeaves++;
         int delayTicks = LeafstormConfig.VALUES.deferDelayTicks.get();
-        rememberDeferredTick(tickAccess, blockId, pos, gameTime + delayTicks);
+        rememberDeferredTick(tickAccess, key, type, pos, gameTime + delayTicks);
         return new Decision(Action.DEFER, delayTicks);
     }
 
-    public static long nextDeferredSubTickOrder() {
-        return nextDeferredSubTickOrder++;
+    @SuppressWarnings("unchecked")
+    public static <T> void drainDeferredTicks(Object tickAccess, BiConsumer<BlockPos, T> ticker, int queueDepth, long gameTime) {
+        if (!LeafstormConfig.enabled()) {
+            return;
+        }
+        DeferredLeafTickQueue queue = DEFERRED_QUEUES.get(tickAccess);
+        if (queue == null || queue.queue.isEmpty()) {
+            return;
+        }
+        updateLivePressure(queueDepth);
+        counters.lastQueueDepth = Math.max(counters.lastQueueDepth, queueDepth);
+        counters.mode = currentMode;
+        counters.queueTrend = trendFor(previousTickQueueDepth, observedQueueDepthThisTick);
+
+        counters.drainBudget = currentDrainBudget;
+        counters.remainingDrainBudget = remainingDrainBudget;
+        counters.drainPaused = drainPaused;
+        counters.drainPauseReason = drainPauseReason;
+        if (remainingDrainBudget <= 0) {
+            counters.skippedDeferredDrains += readyDeferredTicks(queue, gameTime, 16);
+            return;
+        }
+        long drainBudgetNanos = (long)(LeafstormConfig.VALUES.maxDeferredDrainMillisPerTick.get() * 1_000_000.0D);
+        long deadlineNanos = drainBudgetNanos <= 0L ? 0L : System.nanoTime() + drainBudgetNanos;
+        while (remainingDrainBudget > 0) {
+            DeferredLeafTick tick = queue.queue.peek();
+            if (tick == null || tick.triggerTick > gameTime) {
+                break;
+            }
+            if (deadlineNanos > 0L && System.nanoTime() >= deadlineNanos) {
+                counters.drainPaused = true;
+                counters.drainPauseReason = "time_budget";
+                break;
+            }
+            queue.queue.poll();
+            if (queue.byKey.remove(tick.key) == null) {
+                continue;
+            }
+            deferredQueueSize--;
+            remainingDrainBudget--;
+            counters.drainedDeferredLeaves++;
+            counters.allowedLeaves++;
+            counters.lastBlockId = tick.key.blockId();
+            counters.incrementLeaf(tick.key.blockId());
+            ticker.accept(tick.pos, (T)tick.type);
+        }
+        if (queue.queue.isEmpty()) {
+            DEFERRED_QUEUES.remove(tickAccess);
+        }
     }
 
     public static Status status() {
@@ -119,13 +179,24 @@ public final class LeafstormDoctor {
                 lastTickQueueDepth,
                 currentBudget == Integer.MAX_VALUE ? -1 : currentBudget,
                 remainingBudget == Integer.MAX_VALUE ? -1 : remainingBudget,
+                snapshot.drainBudget,
+                snapshot.remainingDrainBudget,
+                snapshot.drainPaused,
+                snapshot.drainPauseReason,
                 snapshot.seenLeaves,
                 snapshot.allowedLeaves,
                 snapshot.deferredLeaves,
+                snapshot.drainedDeferredLeaves,
+                snapshot.skippedDeferredDrains,
                 snapshot.deduplicatedLeaves,
-                deferredDedupKeyCount,
-                snapshot.topLeaves()
+                deferredQueueSize,
+                snapshot.topLeaves(),
+                LeafstormSchedulerReplacement.status()
         );
+    }
+
+    private static void updateLivePressure(int queueDepth) {
+        observedQueueDepthThisTick = Math.max(observedQueueDepthThisTick, queueDepth);
     }
 
     private static Mode modeFor(double mspt, int queueDepth) {
@@ -177,62 +248,93 @@ public final class LeafstormDoctor {
         };
     }
 
-    private static void removeExpiredDedupKey(Object tickAccess, String blockId, BlockPos pos, long gameTime) {
-        LinkedHashMap<DeferredLeafTickKey, Long> ticks = DEFERRED_LEAF_TICKS.get(tickAccess);
-        if (ticks == null) {
-            return;
+    private static int drainBudgetForCurrentTick() {
+        drainPaused = false;
+        drainPauseReason = "none";
+        if (deferredQueueSize <= 0) {
+            return 0;
         }
-        DeferredLeafTickKey key = new DeferredLeafTickKey(blockId, pos.asLong());
-        Long triggerTick = ticks.get(key);
-        if (triggerTick != null && triggerTick <= gameTime) {
-            ticks.remove(key);
-            deferredDedupKeyCount--;
-            if (ticks.isEmpty()) {
-                DEFERRED_LEAF_TICKS.remove(tickAccess);
+        int configuredBudget = LeafstormConfig.VALUES.maxDeferredDrainsPerTick.get();
+        if (configuredBudget <= 0) {
+            drainPaused = true;
+            drainPauseReason = "disabled";
+            return 0;
+        }
+        if (lastMspt >= LeafstormConfig.VALUES.deferredDrainMsptCeiling.get()) {
+            drainPaused = true;
+            drainPauseReason = "mspt";
+            return 0;
+        }
+        int quietLeafTicks = LeafstormConfig.VALUES.deferredDrainQuietLeafTicks.get();
+        if (quietLeafTicks > 0 && lastCounters.seenLeaves >= quietLeafTicks) {
+            drainPaused = true;
+            drainPauseReason = "active_leafstorm";
+            return 0;
+        }
+        if (previousTickQueueDepth >= LeafstormConfig.VALUES.emergencyQueueDepth.get()
+                && queueTrend != QueueTrend.SHRINKING
+                && currentMode != Mode.OFF) {
+            drainPaused = true;
+            drainPauseReason = "queue_pressure";
+            return 0;
+        }
+        return configuredBudget;
+    }
+
+    private static int readyDeferredTicks(DeferredLeafTickQueue queue, long gameTime, int limit) {
+        int ready = 0;
+        for (DeferredLeafTick tick : queue.queue) {
+            if (tick.triggerTick > gameTime || ready >= limit) {
+                break;
             }
+            ready++;
         }
+        return ready;
     }
 
-    private static boolean isDuplicateDeferredTick(Object tickAccess, String blockId, BlockPos pos, long gameTime) {
+    private static boolean isDuplicateDeferredTick(Object tickAccess, DeferredLeafTickKey key, long gameTime) {
         if (!LeafstormConfig.VALUES.enableDeduplication.get()) {
             return false;
         }
-        LinkedHashMap<DeferredLeafTickKey, Long> ticks = DEFERRED_LEAF_TICKS.get(tickAccess);
-        if (ticks == null) {
+        DeferredLeafTickQueue queue = DEFERRED_QUEUES.get(tickAccess);
+        if (queue == null) {
             return false;
         }
-        Long triggerTick = ticks.get(new DeferredLeafTickKey(blockId, pos.asLong()));
-        return triggerTick != null && triggerTick + LeafstormConfig.VALUES.dedupGraceTicks.get() > gameTime;
+        DeferredLeafTick tick = queue.byKey.get(key);
+        if (tick == null) {
+            return false;
+        }
+        return tick.triggerTick > gameTime + LeafstormConfig.VALUES.dedupGraceTicks.get();
     }
 
-    private static void rememberDeferredTick(Object tickAccess, String blockId, BlockPos pos, long triggerTick) {
-        if (!LeafstormConfig.VALUES.enableDeduplication.get()) {
+    private static void rememberDeferredTick(Object tickAccess, DeferredLeafTickKey key, Object type, BlockPos pos, long triggerTick) {
+        DeferredLeafTickQueue queue = DEFERRED_QUEUES.computeIfAbsent(tickAccess, ignored -> new DeferredLeafTickQueue());
+        DeferredLeafTick previous = queue.byKey.get(key);
+        if (previous != null) {
+            previous.triggerTick = Math.max(previous.triggerTick, triggerTick);
             return;
         }
-        LinkedHashMap<DeferredLeafTickKey, Long> ticks = DEFERRED_LEAF_TICKS.computeIfAbsent(tickAccess, ignored -> new LinkedHashMap<>());
-        DeferredLeafTickKey key = new DeferredLeafTickKey(blockId, pos.asLong());
-        if (!ticks.containsKey(key)) {
-            deferredDedupKeyCount++;
-        }
-        ticks.put(key, triggerTick);
-        enforceMaxDedupKeys();
+        DeferredLeafTick tick = new DeferredLeafTick(key, type, pos.immutable(), triggerTick);
+        queue.byKey.put(key, tick);
+        queue.queue.add(tick);
+        deferredQueueSize++;
+        enforceMaxDeferredQueueSize();
     }
 
-    private static void enforceMaxDedupKeys() {
+    private static void enforceMaxDeferredQueueSize() {
         int maxKeys = LeafstormConfig.VALUES.maxDeferredDedupKeys.get();
-        if (deferredDedupKeyCount <= maxKeys) {
+        if (deferredQueueSize <= maxKeys) {
             return;
         }
-        Iterator<Map.Entry<Object, LinkedHashMap<DeferredLeafTickKey, Long>>> outer = DEFERRED_LEAF_TICKS.entrySet().iterator();
-        while (deferredDedupKeyCount > maxKeys && outer.hasNext()) {
-            Map.Entry<Object, LinkedHashMap<DeferredLeafTickKey, Long>> entry = outer.next();
-            Iterator<DeferredLeafTickKey> inner = entry.getValue().keySet().iterator();
-            while (deferredDedupKeyCount > maxKeys && inner.hasNext()) {
-                inner.next();
-                inner.remove();
-                deferredDedupKeyCount--;
+        Iterator<Map.Entry<Object, DeferredLeafTickQueue>> outer = DEFERRED_QUEUES.entrySet().iterator();
+        while (deferredQueueSize > maxKeys && outer.hasNext()) {
+            Map.Entry<Object, DeferredLeafTickQueue> entry = outer.next();
+            DeferredLeafTick tick = entry.getValue().queue.poll();
+            if (tick != null && entry.getValue().byKey.remove(tick.key) != null) {
+                deferredQueueSize--;
+                counters.droppedDeferredLeaves++;
             }
-            if (entry.getValue().isEmpty()) {
+            if (entry.getValue().queue.isEmpty()) {
                 outer.remove();
             }
         }
@@ -255,14 +357,20 @@ public final class LeafstormDoctor {
         lastLoggedMode = counters.mode;
         if (LeafstormConfig.VALUES.consoleLogging.get()) {
             FragmentDoctor.LOGGER.warn(
-                    "Leafstorm limiter {}: deferred={} deduped={} allowed={} budget={} mspt={} queue={} trend={} top_leaves={}",
+                    "Leafstorm limiter {}: deferred={} drained={} skipped_drain={} deduped={} dropped={} allowed={} budget={} drain_budget={} mspt={} queue={} internal_queue={} drain_pause={} trend={} top_leaves={}",
                     counters.mode.logName,
                     counters.deferredLeaves,
+                    counters.drainedDeferredLeaves,
+                    counters.skippedDeferredDrains,
                     counters.deduplicatedLeaves,
+                    counters.droppedDeferredLeaves,
                     counters.allowedLeaves,
                     currentBudget,
+                    currentDrainBudget,
                     String.format(Locale.ROOT, "%.2f", lastMspt),
                     counters.lastQueueDepth,
+                    deferredQueueSize,
+                    counters.drainPaused ? counters.drainPauseReason : "none",
                     counters.queueTrend.logName,
                     counters.topLeaves()
             );
@@ -281,13 +389,17 @@ public final class LeafstormDoctor {
         JsonObject budget = baseJsonEvent(server, "leafstorm_budget");
         addCommonSummaryFields(budget);
         budget.addProperty("remaining_budget", remainingBudget == Integer.MAX_VALUE ? -1 : remainingBudget);
+        budget.addProperty("drain_budget", currentDrainBudget);
+        budget.addProperty("remaining_drain_budget", remainingDrainBudget);
+        budget.addProperty("drain_paused", counters.drainPaused);
+        budget.addProperty("drain_pause_reason", counters.drainPauseReason);
 
         JsonObject queue = baseJsonEvent(server, "leafstorm_queue_snapshot");
         queue.addProperty("last_mspt", lastMspt);
         queue.addProperty("queue_depth", counters.lastQueueDepth);
         queue.addProperty("previous_queue_depth", previousTickQueueDepth);
         queue.addProperty("queue_trend", counters.queueTrend.logName);
-        queue.addProperty("dedup_key_count", deferredDedupKeyCount);
+        queue.addProperty("deferred_queue_size", deferredQueueSize);
 
         appendJsonl(server, summary, budget, queue);
 
@@ -295,8 +407,14 @@ public final class LeafstormDoctor {
             JsonObject deferred = baseJsonEvent(server, "leafstorm_deferred");
             addCommonSummaryFields(deferred);
             deferred.addProperty("deferred_leaf_ticks", counters.deferredLeaves);
-            deferred.addProperty("origin", "doctor_reschedule");
+            deferred.addProperty("origin", "doctor_deferred");
             appendJsonl(server, deferred);
+        }
+        if (counters.drainedDeferredLeaves > 0) {
+            JsonObject executed = baseJsonEvent(server, "leafstorm_executed");
+            addCommonSummaryFields(executed);
+            executed.addProperty("executed_deferred_leaf_ticks", counters.drainedDeferredLeaves);
+            appendJsonl(server, executed);
         }
         if (counters.deduplicatedLeaves > 0) {
             JsonObject deduplicated = baseJsonEvent(server, "leafstorm_deduplicated");
@@ -309,7 +427,7 @@ public final class LeafstormDoctor {
 
     private static JsonObject baseJsonEvent(MinecraftServer server, String event) {
         JsonObject object = new JsonObject();
-        object.addProperty("schema", "fragmentdoctor.leafstorm_doctor.v1");
+        object.addProperty("schema", "fragmentdoctor.leafstorm_doctor.v2");
         object.addProperty("event", event);
         object.addProperty("server_tick", server.getTickCount());
         return object;
@@ -321,10 +439,17 @@ public final class LeafstormDoctor {
         object.addProperty("queue_depth", counters.lastQueueDepth);
         object.addProperty("queue_trend", counters.queueTrend.logName);
         object.addProperty("budget", currentBudget == Integer.MAX_VALUE ? -1 : currentBudget);
+        object.addProperty("drain_budget", counters.drainBudget);
+        object.addProperty("remaining_drain_budget", counters.remainingDrainBudget);
+        object.addProperty("drain_paused", counters.drainPaused);
+        object.addProperty("drain_pause_reason", counters.drainPauseReason);
         object.addProperty("allowed_leaf_ticks", counters.allowedLeaves);
         object.addProperty("deferred_leaf_ticks", counters.deferredLeaves);
+        object.addProperty("drained_deferred_leaf_ticks", counters.drainedDeferredLeaves);
+        object.addProperty("skipped_deferred_leaf_ticks", counters.skippedDeferredDrains);
         object.addProperty("deduplicated_leaf_ticks", counters.deduplicatedLeaves);
-        object.addProperty("dedup_key_count", deferredDedupKeyCount);
+        object.addProperty("dropped_deferred_leaf_ticks", counters.droppedDeferredLeaves);
+        object.addProperty("deferred_queue_size", deferredQueueSize);
     }
 
     private static void appendJsonl(MinecraftServer server, JsonObject... objects) {
@@ -392,8 +517,15 @@ public final class LeafstormDoctor {
         private int seenLeaves;
         private int allowedLeaves;
         private int deferredLeaves;
+        private int drainedDeferredLeaves;
+        private int skippedDeferredDrains;
         private int deduplicatedLeaves;
+        private int droppedDeferredLeaves;
         private int lastQueueDepth;
+        private int drainBudget;
+        private int remainingDrainBudget;
+        private boolean drainPaused;
+        private String drainPauseReason = "none";
         private String lastBlockId = "unknown";
         private final Map<String, Integer> leafCounts = new LinkedHashMap<>();
 
@@ -402,7 +534,7 @@ public final class LeafstormDoctor {
         }
 
         private int mitigationEvents() {
-            return deferredLeaves + deduplicatedLeaves;
+            return deferredLeaves + drainedDeferredLeaves + skippedDeferredDrains + deduplicatedLeaves + droppedDeferredLeaves;
         }
 
         private String topLeaves() {
@@ -423,11 +555,37 @@ public final class LeafstormDoctor {
             copy.seenLeaves = seenLeaves;
             copy.allowedLeaves = allowedLeaves;
             copy.deferredLeaves = deferredLeaves;
+            copy.drainedDeferredLeaves = drainedDeferredLeaves;
+            copy.skippedDeferredDrains = skippedDeferredDrains;
             copy.deduplicatedLeaves = deduplicatedLeaves;
+            copy.droppedDeferredLeaves = droppedDeferredLeaves;
             copy.lastQueueDepth = lastQueueDepth;
+            copy.drainBudget = drainBudget;
+            copy.remainingDrainBudget = remainingDrainBudget;
+            copy.drainPaused = drainPaused;
+            copy.drainPauseReason = drainPauseReason;
             copy.lastBlockId = lastBlockId;
             copy.leafCounts.putAll(leafCounts);
             return copy;
+        }
+    }
+
+    private static final class DeferredLeafTickQueue {
+        private final ArrayDeque<DeferredLeafTick> queue = new ArrayDeque<>();
+        private final Map<DeferredLeafTickKey, DeferredLeafTick> byKey = new LinkedHashMap<>();
+    }
+
+    private static final class DeferredLeafTick {
+        private final DeferredLeafTickKey key;
+        private final Object type;
+        private final BlockPos pos;
+        private long triggerTick;
+
+        private DeferredLeafTick(DeferredLeafTickKey key, Object type, BlockPos pos, long triggerTick) {
+            this.key = key;
+            this.type = type;
+            this.pos = pos;
+            this.triggerTick = triggerTick;
         }
     }
 
@@ -452,12 +610,19 @@ public final class LeafstormDoctor {
             int queueDepth,
             int budget,
             int remainingBudget,
+            int drainBudget,
+            int remainingDrainBudget,
+            boolean drainPaused,
+            String drainPauseReason,
             int seenLeaves,
             int allowedLeaves,
             int deferredLeaves,
+            int drainedDeferredLeaves,
+            int skippedDeferredDrains,
             int deduplicatedLeaves,
-            int dedupKeyCount,
-            String topLeaves
+            int deferredQueueSize,
+            String topLeaves,
+            LeafstormSchedulerReplacement.Status scheduler
     ) {
     }
 }

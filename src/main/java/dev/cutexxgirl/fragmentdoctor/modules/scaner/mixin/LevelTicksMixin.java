@@ -1,11 +1,11 @@
 package dev.cutexxgirl.fragmentdoctor.modules.scaner.mixin;
 
 import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormDoctor;
+import dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm.LeafstormSchedulerReplacement;
 import dev.cutexxgirl.fragmentdoctor.modules.scaner.instrumentation.CostRecorder;
 import java.util.function.BiConsumer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.ticks.ScheduledTick;
-import net.minecraft.world.ticks.TickPriority;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -24,9 +24,14 @@ public abstract class LevelTicksMixin<T> {
     @Shadow
     public abstract int count();
 
-    @Inject(method = "schedule", at = @At("HEAD"))
+    @Inject(method = "schedule", at = @At("HEAD"), cancellable = true)
     private void fragmentdoctor$scheduledTickEnqueued(ScheduledTick<T> tick, CallbackInfo ci) {
-        if (CostRecorder.active() && tick != null) {
+        LeafstormSchedulerReplacement.ScheduleDecision decision = LeafstormSchedulerReplacement.beforeSchedule(this, tick);
+        if (decision.cancelVanilla()) {
+            ci.cancel();
+            return;
+        }
+        if (!decision.scannerRecorded() && CostRecorder.active() && tick != null) {
             CostRecorder.recordScheduledTick(tick.type(), tick.pos());
         }
     }
@@ -35,6 +40,12 @@ public abstract class LevelTicksMixin<T> {
     private void fragmentdoctor$leafstormTickStart(long gameTime, int maxAllowedTicks, BiConsumer<BlockPos, T> ticker, CallbackInfo ci) {
         fragmentdoctor$gameTime = gameTime;
         fragmentdoctor$queueDepth = count();
+    }
+
+    @Inject(method = "runCollectedTicks", at = @At("HEAD"))
+    private void fragmentdoctor$drainDeferredLeafTicks(BiConsumer<BlockPos, T> ticker, CallbackInfo ci) {
+        LeafstormSchedulerReplacement.drain(this, ticker, fragmentdoctor$gameTime);
+        LeafstormDoctor.drainDeferredTicks(this, ticker, fragmentdoctor$queueDepth, fragmentdoctor$gameTime);
     }
 
     @SuppressWarnings("unchecked")
@@ -50,17 +61,6 @@ public abstract class LevelTicksMixin<T> {
             ticker.accept(blockPos, (T)type);
             return;
         }
-        CostRecorder.pushScheduledTickOrigin(CostRecorder.ORIGIN_DOCTOR_RESCHEDULE);
-        try {
-            schedule(new ScheduledTick<>(
-                    (T)type,
-                    blockPos,
-                    fragmentdoctor$gameTime + decision.delayTicks(),
-                    TickPriority.NORMAL,
-                    LeafstormDoctor.nextDeferredSubTickOrder()
-            ));
-        } finally {
-            CostRecorder.popScheduledTickOrigin();
-        }
+        CostRecorder.recordScheduledTick(type, blockPos, CostRecorder.ORIGIN_DOCTOR_DEFERRED);
     }
 }

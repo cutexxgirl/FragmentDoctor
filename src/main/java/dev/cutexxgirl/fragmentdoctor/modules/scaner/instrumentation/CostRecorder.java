@@ -21,7 +21,14 @@ import net.neoforged.bus.api.EventListener;
 public final class CostRecorder {
     public static final String ORIGIN_VANILLA_SCHEDULE = "vanilla_schedule";
     public static final String ORIGIN_DOCTOR_RESCHEDULE = "doctor_reschedule";
+    public static final String ORIGIN_DOCTOR_DEFERRED = "doctor_deferred";
     public static final String ORIGIN_DOCTOR_DEDUPLICATED = "doctor_deduplicated";
+    public static final String ORIGIN_VANILLA_LEAF_INTERCEPTED = "vanilla_leaf_intercepted";
+    public static final String ORIGIN_SCHEDULER_ENQUEUED = "scheduler_enqueued";
+    public static final String ORIGIN_SCHEDULER_COALESCED = "scheduler_coalesced";
+    public static final String ORIGIN_SCHEDULER_EXECUTED = "scheduler_executed";
+    public static final String ORIGIN_SCHEDULER_SKIPPED_BUDGET = "scheduler_skipped_budget";
+    public static final String ORIGIN_SCHEDULER_DROPPED_STALE = "scheduler_dropped_stale";
     private static final long AI_THRESHOLD_NANOS = 250_000L;
     private static final long ENTITY_QUERY_THRESHOLD_NANOS = 250_000L;
     private static final long EVENT_LISTENER_THRESHOLD_NANOS = 500_000L;

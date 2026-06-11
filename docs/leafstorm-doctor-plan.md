@@ -2,7 +2,7 @@
 
 ## Current Situation
 
-Fragment Doctor `scaner` successfully identified the original Regions Unexplored redwood issue as a leaf scheduled-tick storm.
+Fragment Doctor `Scanner` successfully identified the original Regions Unexplored redwood issue as a leaf scheduled-tick storm.
 
 The first bad scan showed:
 
@@ -121,7 +121,7 @@ Unsafe async work:
 
 ## Recommended Fix: Adaptive Leaf Tick Queue
 
-Implement a doctor-style mitigation, not as normal scaner behavior.
+Implement a doctor-style mitigation, not as normal Scanner behavior.
 
 Goal:
 
@@ -153,9 +153,9 @@ Create a future module/package:
 
 - `dev.cutexxgirl.fragmentdoctor.modules.doctor.leafstorm`
 
-Or, if keeping it inside scaner temporarily:
+Or, if keeping it inside Scanner temporarily:
 
-- `dev.cutexxgirl.fragmentdoctor.modules.scaner.mitigation`
+- `dev.cutexxgirl.fragmentdoctor.modules.scanner.mitigation`
 
 Core parts:
 
@@ -279,7 +279,7 @@ It should not be the direct cause of server-side:
 - Do not disable biomes or trees as the main solution.
 - Avoid compromises that reduce the RPG/worldgen experience.
 - Prefer surgical diagnostics and mitigation.
-- Future `doctor` module may modify behavior via mixins, but current scaner should primarily diagnose.
+- Future `doctor` module may modify behavior via mixins, but current Scanner should primarily diagnose.
 
 ## Implementation Progress
 

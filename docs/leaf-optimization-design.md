@@ -327,7 +327,7 @@ fragmentdoctor.doctor.mixins.json
 Or if doctor module is not ready yet, put experimental implementation under:
 
 ```text
-dev.cutexxgirl.fragmentdoctor.modules.scaner.mitigation
+dev.cutexxgirl.fragmentdoctor.modules.scanner.mitigation
 ```
 
 But long-term it belongs in `doctor`.

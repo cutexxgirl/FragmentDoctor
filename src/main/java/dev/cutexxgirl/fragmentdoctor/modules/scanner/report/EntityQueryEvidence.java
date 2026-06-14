@@ -20,6 +20,8 @@ public final class EntityQueryEvidence {
     private final Map<String, Integer> chunks = new LinkedHashMap<>();
     private final Map<String, Integer> queryShapes = new LinkedHashMap<>();
     private final Map<String, Integer> aiOwners = new LinkedHashMap<>();
+    private final Map<String, Integer> aiComponents = new LinkedHashMap<>();
+    private final Map<String, Integer> aiPhases = new LinkedHashMap<>();
     private final Map<String, Integer> frames = new LinkedHashMap<>();
 
     public EntityQueryEvidence(String key, String suspectedModId) {
@@ -45,6 +47,14 @@ public final class EntityQueryEvidence {
         String aiOwner = parseAiOwner(record.target().detail());
         if (aiOwner != null) {
             increment(aiOwners, aiOwner);
+        }
+        String aiComponent = parseDetailValue(record.target().detail(), "ai_component=");
+        if (aiComponent != null) {
+            increment(aiComponents, aiComponent);
+        }
+        String aiPhase = parseDetailValue(record.target().detail(), "ai_phase=");
+        if (aiPhase != null) {
+            increment(aiPhases, aiPhase);
         }
         record.caller().stack().stream().limit(10).forEach(frame -> increment(frames, frame));
     }
@@ -97,6 +107,14 @@ public final class EntityQueryEvidence {
         return aiOwners;
     }
 
+    public Map<String, Integer> aiComponents() {
+        return aiComponents;
+    }
+
+    public Map<String, Integer> aiPhases() {
+        return aiPhases;
+    }
+
     public Map<String, Integer> frames() {
         return frames;
     }
@@ -129,6 +147,23 @@ public final class EntityQueryEvidence {
             end = detail.length();
         }
         return detail.substring(index + "ai_owner=".length(), end);
+    }
+
+    private static String parseDetailValue(String detail, String prefix) {
+        if (detail == null) {
+            return null;
+        }
+        int index = detail.indexOf(prefix);
+        if (index < 0) {
+            return null;
+        }
+        int start = index + prefix.length();
+        int end = detail.indexOf(", ", start);
+        if (end < 0) {
+            end = detail.length();
+        }
+        String value = detail.substring(start, end).trim();
+        return value.isEmpty() ? null : value;
     }
 
     private static void increment(Map<String, Integer> map, String key) {

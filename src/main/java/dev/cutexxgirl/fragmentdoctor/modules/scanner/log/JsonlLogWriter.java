@@ -3,6 +3,7 @@ package dev.cutexxgirl.fragmentdoctor.modules.scanner.log;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
+import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.ScannerSelfOverhead;
 import java.io.BufferedWriter;
 import java.io.Closeable;
 import java.io.IOException;
@@ -43,16 +44,21 @@ public final class JsonlLogWriter implements Closeable {
     }
 
     public void write(JsonObject object) {
-        IOException currentFailure = failure.get();
-        if (currentFailure != null) {
-            throw new IllegalStateException("Failed to write Fragment Doctor scanner log", currentFailure);
-        }
-        if (closing.get()) {
-            return;
-        }
-        String line = GSON.toJson(object);
-        if (!queue.offer(line)) {
-            droppedEvents.incrementAndGet();
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            IOException currentFailure = failure.get();
+            if (currentFailure != null) {
+                throw new IllegalStateException("Failed to write Fragment Doctor scanner log", currentFailure);
+            }
+            if (closing.get()) {
+                return;
+            }
+            String line = GSON.toJson(object);
+            if (!queue.offer(line)) {
+                droppedEvents.incrementAndGet();
+            }
+        } finally {
+            ScannerSelfOverhead.end("json_enqueue", overheadStart);
         }
     }
 
@@ -67,24 +73,38 @@ public final class JsonlLogWriter implements Closeable {
                 String line = queue.poll(250L, TimeUnit.MILLISECONDS);
                 if (line == null) {
                     if (pendingFlush > 0) {
-                        writer.flush();
+                        flushMeasured();
                         pendingFlush = 0;
                     }
                     continue;
                 }
-                writer.write(line);
-                writer.newLine();
+                long overheadStart = ScannerSelfOverhead.start();
+                try {
+                    writer.write(line);
+                    writer.newLine();
+                } finally {
+                    ScannerSelfOverhead.end("json_writer", overheadStart);
+                }
                 pendingFlush++;
                 if (pendingFlush >= FLUSH_BATCH_SIZE) {
-                    writer.flush();
+                    flushMeasured();
                     pendingFlush = 0;
                 }
             }
-            writer.flush();
+            flushMeasured();
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
         } catch (IOException exception) {
             failure.compareAndSet(null, exception);
+        }
+    }
+
+    private void flushMeasured() throws IOException {
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            writer.flush();
+        } finally {
+            ScannerSelfOverhead.end("json_flush", overheadStart);
         }
     }
 

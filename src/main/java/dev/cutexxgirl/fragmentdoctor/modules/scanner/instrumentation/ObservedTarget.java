@@ -97,8 +97,16 @@ public record ObservedTarget(
     }
 
     public static ObservedTarget navigation(PathNavigation navigation, Mob owner) {
+        return navigation(navigation, owner, null);
+    }
+
+    public static ObservedTarget navigation(PathNavigation navigation, Mob owner, String context) {
         String navigationClass = navigation.getClass().getName();
-        return livingAiTarget("navigation", navigationClass, navigationClass, owner, "path_navigation_tick");
+        String detail = "path_navigation_tick";
+        if (context != null && !context.isBlank()) {
+            detail += ", " + context;
+        }
+        return livingAiTarget("navigation", navigationClass, navigationClass, owner, detail);
     }
 
     public static ObservedTarget entityQuery(Level level, AABB bounds, int resultCount, String queryKind) {

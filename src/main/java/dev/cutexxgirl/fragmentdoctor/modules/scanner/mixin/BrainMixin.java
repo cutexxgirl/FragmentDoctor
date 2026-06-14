@@ -23,10 +23,12 @@ public abstract class BrainMixin {
             return;
         }
         long start = System.nanoTime();
+        CostRecorder.pushBrainContext(sensor, entity, "sensor_tick");
         try {
             original.call(sensor, level, entity);
         } finally {
             CostRecorder.recordBrainSensor(sensor, entity, System.nanoTime() - start);
+            CostRecorder.popBrainContext(sensor);
         }
     }
 
@@ -39,10 +41,12 @@ public abstract class BrainMixin {
             return original.call(behavior, level, entity, gameTime);
         }
         long start = System.nanoTime();
+        CostRecorder.pushBrainContext(behavior, entity, "behavior_try_start");
         try {
             return original.call(behavior, level, entity, gameTime);
         } finally {
             CostRecorder.recordBrainBehavior(behavior, entity, "behavior_try_start", System.nanoTime() - start);
+            CostRecorder.popBrainContext(behavior);
         }
     }
 
@@ -56,10 +60,12 @@ public abstract class BrainMixin {
             return;
         }
         long start = System.nanoTime();
+        CostRecorder.pushBrainContext(behavior, entity, "behavior_tick_or_stop");
         try {
             original.call(behavior, level, entity, gameTime);
         } finally {
             CostRecorder.recordBrainBehavior(behavior, entity, "behavior_tick_or_stop", System.nanoTime() - start);
+            CostRecorder.popBrainContext(behavior);
         }
     }
 }

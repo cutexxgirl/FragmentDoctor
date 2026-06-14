@@ -161,7 +161,7 @@ public final class LeafstormConfig {
                     .comment("Maximum newly loaded Create entity ticks allowed per server tick while smoothing.")
                     .defineInRange("entityBudget", 8, 0, 65_536);
             createSmootherWarmupTicks = builder
-                    .comment("Only Create objects first seen within this many server ticks are smoothed.")
+                    .comment("Base smoothing lifetime for newly seen Create objects. Release is deterministically spread over another window of this size to avoid a thundering herd.")
                     .defineInRange("warmupTicks", 20 * 10, 1, 20 * 60 * 10);
             createSmootherHighRiskBudget = builder
                     .comment("Maximum high-risk Create kinetic/fluid/contraption ticks allowed per server tick while smoothing.")

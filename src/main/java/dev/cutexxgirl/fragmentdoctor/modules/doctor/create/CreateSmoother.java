@@ -7,6 +7,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -20,6 +23,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
 public final class CreateSmoother {
+    private static final DateTimeFormatter FILE_STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
     private static final Map<String, TickState> BLOCK_ENTITIES = new LinkedHashMap<>();
     private static final Map<String, TickState> ENTITIES = new LinkedHashMap<>();
     private static long serverTickIndex;
@@ -31,6 +35,7 @@ public final class CreateSmoother {
     private static int remainingForcedBlockEntityBudget;
     private static int remainingForcedEntityBudget;
     private static long lastSummaryLogTick = Long.MIN_VALUE;
+    private static Path logPath;
     private static TickCounters counters = new TickCounters();
     private static TickCounters lastCounters = new TickCounters();
 
@@ -71,7 +76,7 @@ public final class CreateSmoother {
         }
         String key = blockEntityKey(level, blockEntity);
         counters.seenBlockEntities++;
-        return shouldSkip(BLOCK_ENTITIES.computeIfAbsent(key, ignored -> new TickState()), true, isHighRiskCreateClass(blockEntity.getClass().getName()));
+        return shouldSkip(BLOCK_ENTITIES.computeIfAbsent(key, ignored -> new TickState(key)), true, isHighRiskCreateClass(blockEntity.getClass().getName()));
     }
 
     public static boolean shouldSkipEntityTick(ServerLevel level, Entity entity) {
@@ -80,7 +85,7 @@ public final class CreateSmoother {
         }
         String key = entityKey(level, entity);
         counters.seenEntities++;
-        return shouldSkip(ENTITIES.computeIfAbsent(key, ignored -> new TickState()), false, isHighRiskCreateClass(entity.getClass().getName()));
+        return shouldSkip(ENTITIES.computeIfAbsent(key, ignored -> new TickState(key)), false, isHighRiskCreateClass(entity.getClass().getName()));
     }
 
     public static Status status() {
@@ -115,6 +120,7 @@ public final class CreateSmoother {
         remainingForcedBlockEntityBudget = 0;
         remainingForcedEntityBudget = 0;
         lastSummaryLogTick = Long.MIN_VALUE;
+        logPath = null;
         counters = new TickCounters();
         lastCounters = new TickCounters();
     }
@@ -122,7 +128,7 @@ public final class CreateSmoother {
     private static boolean shouldSkip(TickState state, boolean blockEntity, boolean highRisk) {
         state.lastSeenTick = serverTickIndex;
         long age = serverTickIndex - state.firstSeenTick;
-        if (age > LeafstormConfig.VALUES.createSmootherWarmupTicks.get()) {
+        if (serverTickIndex > state.smoothingUntilTick) {
             state.consecutiveSkips = 0;
             allow(blockEntity);
             return false;
@@ -299,11 +305,15 @@ public final class CreateSmoother {
     }
 
     private static void appendJsonl(MinecraftServer server, JsonObject object) {
-        Path path = server.getServerDirectory()
-                .resolve("fragmentdoctor")
-                .resolve("doctor")
-                .resolve("create")
-                .resolve("create-smoother.jsonl");
+        Path path = logPath;
+        if (path == null) {
+            path = server.getServerDirectory()
+                    .resolve("fragmentdoctor")
+                    .resolve("doctor")
+                    .resolve("create")
+                    .resolve("create-smoother-" + FILE_STAMP.format(Instant.now()) + ".jsonl");
+            logPath = path;
+        }
         try {
             Files.createDirectories(path.getParent());
             Files.writeString(path, object + System.lineSeparator(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
@@ -314,8 +324,15 @@ public final class CreateSmoother {
 
     private static final class TickState {
         private final long firstSeenTick = serverTickIndex;
+        private final long smoothingUntilTick;
         private long lastSeenTick = serverTickIndex;
         private int consecutiveSkips;
+
+        private TickState(String key) {
+            int warmupTicks = LeafstormConfig.VALUES.createSmootherWarmupTicks.get();
+            int releaseSpread = Math.max(1, warmupTicks);
+            this.smoothingUntilTick = serverTickIndex + warmupTicks + Math.floorMod(key.hashCode(), releaseSpread);
+        }
     }
 
     private static final class TickCounters {

@@ -25,14 +25,16 @@ public abstract class WrappedGoalMixin {
     @Inject(method = "canUse", at = @At("HEAD"))
     private void fragmentdoctor$canUseStart(CallbackInfoReturnable<Boolean> cir) {
         if (CostRecorder.active()) {
+            CostRecorder.pushGoalContext((WrappedGoal)(Object)this, "goal_can_use");
             fragmentdoctor$canUseStart = System.nanoTime();
         }
     }
 
     @Inject(method = "canUse", at = @At("RETURN"))
     private void fragmentdoctor$canUseEnd(CallbackInfoReturnable<Boolean> cir) {
-        if (CostRecorder.active() && fragmentdoctor$canUseStart != 0L) {
+        if (fragmentdoctor$canUseStart != 0L) {
             CostRecorder.recordGoal((WrappedGoal)(Object)this, "goal_can_use", System.nanoTime() - fragmentdoctor$canUseStart);
+            CostRecorder.popGoalContext((WrappedGoal)(Object)this);
             fragmentdoctor$canUseStart = 0L;
         }
     }
@@ -40,14 +42,16 @@ public abstract class WrappedGoalMixin {
     @Inject(method = "canContinueToUse", at = @At("HEAD"))
     private void fragmentdoctor$canContinueStart(CallbackInfoReturnable<Boolean> cir) {
         if (CostRecorder.active()) {
+            CostRecorder.pushGoalContext((WrappedGoal)(Object)this, "goal_can_continue");
             fragmentdoctor$canContinueStart = System.nanoTime();
         }
     }
 
     @Inject(method = "canContinueToUse", at = @At("RETURN"))
     private void fragmentdoctor$canContinueEnd(CallbackInfoReturnable<Boolean> cir) {
-        if (CostRecorder.active() && fragmentdoctor$canContinueStart != 0L) {
+        if (fragmentdoctor$canContinueStart != 0L) {
             CostRecorder.recordGoal((WrappedGoal)(Object)this, "goal_can_continue", System.nanoTime() - fragmentdoctor$canContinueStart);
+            CostRecorder.popGoalContext((WrappedGoal)(Object)this);
             fragmentdoctor$canContinueStart = 0L;
         }
     }
@@ -55,14 +59,16 @@ public abstract class WrappedGoalMixin {
     @Inject(method = "start", at = @At("HEAD"))
     private void fragmentdoctor$startStart(CallbackInfo ci) {
         if (CostRecorder.active()) {
+            CostRecorder.pushGoalContext((WrappedGoal)(Object)this, "goal_start");
             fragmentdoctor$startStart = System.nanoTime();
         }
     }
 
     @Inject(method = "start", at = @At("TAIL"))
     private void fragmentdoctor$startEnd(CallbackInfo ci) {
-        if (CostRecorder.active() && fragmentdoctor$startStart != 0L) {
+        if (fragmentdoctor$startStart != 0L) {
             CostRecorder.recordGoal((WrappedGoal)(Object)this, "goal_start", System.nanoTime() - fragmentdoctor$startStart);
+            CostRecorder.popGoalContext((WrappedGoal)(Object)this);
             fragmentdoctor$startStart = 0L;
         }
     }
@@ -70,14 +76,16 @@ public abstract class WrappedGoalMixin {
     @Inject(method = "stop", at = @At("HEAD"))
     private void fragmentdoctor$stopStart(CallbackInfo ci) {
         if (CostRecorder.active()) {
+            CostRecorder.pushGoalContext((WrappedGoal)(Object)this, "goal_stop");
             fragmentdoctor$stopStart = System.nanoTime();
         }
     }
 
     @Inject(method = "stop", at = @At("TAIL"))
     private void fragmentdoctor$stopEnd(CallbackInfo ci) {
-        if (CostRecorder.active() && fragmentdoctor$stopStart != 0L) {
+        if (fragmentdoctor$stopStart != 0L) {
             CostRecorder.recordGoal((WrappedGoal)(Object)this, "goal_stop", System.nanoTime() - fragmentdoctor$stopStart);
+            CostRecorder.popGoalContext((WrappedGoal)(Object)this);
             fragmentdoctor$stopStart = 0L;
         }
     }
@@ -85,14 +93,16 @@ public abstract class WrappedGoalMixin {
     @Inject(method = "tick", at = @At("HEAD"))
     private void fragmentdoctor$tickStart(CallbackInfo ci) {
         if (CostRecorder.active()) {
+            CostRecorder.pushGoalContext((WrappedGoal)(Object)this, "goal_tick");
             fragmentdoctor$tickStart = System.nanoTime();
         }
     }
 
     @Inject(method = "tick", at = @At("TAIL"))
     private void fragmentdoctor$tickEnd(CallbackInfo ci) {
-        if (CostRecorder.active() && fragmentdoctor$tickStart != 0L) {
+        if (fragmentdoctor$tickStart != 0L) {
             CostRecorder.recordGoal((WrappedGoal)(Object)this, "goal_tick", System.nanoTime() - fragmentdoctor$tickStart);
+            CostRecorder.popGoalContext((WrappedGoal)(Object)this);
             fragmentdoctor$tickStart = 0L;
         }
     }

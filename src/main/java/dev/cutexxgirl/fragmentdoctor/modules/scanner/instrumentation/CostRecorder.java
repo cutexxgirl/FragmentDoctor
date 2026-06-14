@@ -38,6 +38,7 @@ public final class CostRecorder {
     private static final int ATTRIBUTION_SAMPLE_INTERVAL = 128;
     private static final int SCHEDULED_TICK_STACK_SAMPLE_INTERVAL = 4096;
     private static final ThreadLocal<Mob> CURRENT_AI_OWNER = new ThreadLocal<>();
+    private static final ThreadLocal<AiContext> CURRENT_AI_CONTEXT = new ThreadLocal<>();
     private static final ThreadLocal<String> SCHEDULE_ORIGIN = new ThreadLocal<>();
     private static final ConcurrentHashMap<String, AttributionSample> ATTRIBUTION_SAMPLES = new ConcurrentHashMap<>();
 
@@ -52,13 +53,18 @@ public final class CostRecorder {
         if (!active() || !shouldRecord(eventType, section, durationNanos)) {
             return;
         }
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                eventType,
-                section,
-                target,
-                AttributionResolver.capture(target.ownerModId()),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    eventType,
+                    section,
+                    target,
+                    AttributionResolver.capture(target.ownerModId()),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("record_section", overheadStart);
+        }
     }
 
     public static boolean shouldRecord(String eventType, String section, long durationNanos) {
@@ -100,25 +106,40 @@ public final class CostRecorder {
         if (!active()) {
             return;
         }
-        ObservedTarget target = ObservedTarget.scheduledTick(type, pos);
-        String normalizedOrigin = origin == null || origin.isBlank() ? ORIGIN_VANILLA_SCHEDULE : origin;
-        ScannerRuntime.sessions().recordScheduledTick(target, scheduledTickAttribution(target, normalizedOrigin), normalizedOrigin);
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            ObservedTarget target = ObservedTarget.scheduledTick(type, pos);
+            String normalizedOrigin = origin == null || origin.isBlank() ? ORIGIN_VANILLA_SCHEDULE : origin;
+            ScannerRuntime.sessions().recordScheduledTick(target, scheduledTickAttribution(target, normalizedOrigin), normalizedOrigin);
+        } finally {
+            ScannerSelfOverhead.end("scheduled_tick_capture", overheadStart);
+        }
     }
 
     public static void recordGlError(int error, String description, String section) {
         if (!active()) {
             return;
         }
-        String key = "gl:" + error + ":" + section;
-        ScannerRuntime.sessions().recordGlError(error, description, section, cachedAttribution(key, "client_gl", ATTRIBUTION_SAMPLE_INTERVAL));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            String key = "gl:" + error + ":" + section;
+            ScannerRuntime.sessions().recordGlError(error, description, section, cachedAttribution(key, "client_gl", ATTRIBUTION_SAMPLE_INTERVAL));
+        } finally {
+            ScannerSelfOverhead.end("gl_error_capture", overheadStart);
+        }
     }
 
     public static void recordInvalidKeyPoll(long window, int keyCode) {
         if (!active()) {
             return;
         }
-        String key = "input:key:" + keyCode;
-        ScannerRuntime.sessions().recordInvalidKeyPoll(keyCode, cachedAttribution(key, "client_input", ATTRIBUTION_SAMPLE_INTERVAL));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            String key = "input:key:" + keyCode;
+            ScannerRuntime.sessions().recordInvalidKeyPoll(keyCode, cachedAttribution(key, "client_input", ATTRIBUTION_SAMPLE_INTERVAL));
+        } finally {
+            ScannerSelfOverhead.end("input_capture", overheadStart);
+        }
     }
 
     public static void pushAiOwner(Mob owner) {
@@ -128,9 +149,36 @@ public final class CostRecorder {
     }
 
     public static void popAiOwner(Mob owner) {
-        if (active() && CURRENT_AI_OWNER.get() == owner) {
+        if (CURRENT_AI_OWNER.get() == owner) {
+            CURRENT_AI_CONTEXT.remove();
             CURRENT_AI_OWNER.remove();
         }
+    }
+
+    public static void pushGoalContext(WrappedGoal goal, String phase) {
+        if (!active()) {
+            return;
+        }
+        Mob owner = CURRENT_AI_OWNER.get();
+        if (owner == null || goal == null) {
+            return;
+        }
+        CURRENT_AI_CONTEXT.set(AiContext.goal(goal.getGoal().getClass().getName(), phase, goal.getPriority(), owner));
+    }
+
+    public static void popGoalContext(WrappedGoal goal) {
+        CURRENT_AI_CONTEXT.remove();
+    }
+
+    public static void pushBrainContext(Object component, LivingEntity owner, String phase) {
+        if (!active() || component == null || owner == null) {
+            return;
+        }
+        CURRENT_AI_CONTEXT.set(AiContext.brain(component.getClass().getName(), phase, owner));
+    }
+
+    public static void popBrainContext(Object component) {
+        CURRENT_AI_CONTEXT.remove();
     }
 
     public static void recordGoal(WrappedGoal goal, String phase, long durationNanos) {
@@ -138,107 +186,159 @@ public final class CostRecorder {
         if (!active() || owner == null || durationNanos < AI_THRESHOLD_NANOS) {
             return;
         }
-        String goalClass = goal.getGoal().getClass().getName();
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                "ai_goal_cost",
-                phase,
-                ObservedTarget.goal(goal, owner, phase),
-                AttributionResolver.fromClassName(goalClass, phase, ownerModId(owner), compactStack()),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            String goalClass = goal.getGoal().getClass().getName();
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    "ai_goal_cost",
+                    phase,
+                    ObservedTarget.goal(goal, owner, phase),
+                    AttributionResolver.fromClassName(goalClass, phase, ownerModId(owner), compactStack()),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("ai_goal_capture", overheadStart);
+        }
     }
 
     public static void recordBrainBehavior(BehaviorControl<?> behavior, LivingEntity owner, String phase, long durationNanos) {
         if (!active() || durationNanos < AI_THRESHOLD_NANOS) {
             return;
         }
-        String behaviorClass = behavior.getClass().getName();
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                "brain_behavior_cost",
-                phase,
-                ObservedTarget.brainBehavior(behavior, owner, phase),
-                AttributionResolver.fromClassName(behaviorClass, phase, ownerModId(owner), compactStack()),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            String behaviorClass = behavior.getClass().getName();
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    "brain_behavior_cost",
+                    phase,
+                    ObservedTarget.brainBehavior(behavior, owner, phase),
+                    AttributionResolver.fromClassName(behaviorClass, phase, ownerModId(owner), compactStack()),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("brain_behavior_capture", overheadStart);
+        }
     }
 
     public static void recordBrainSensor(Sensor<?> sensor, LivingEntity owner, long durationNanos) {
         if (!active() || durationNanos < AI_THRESHOLD_NANOS) {
             return;
         }
-        String sensorClass = sensor.getClass().getName();
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                "brain_sensor_cost",
-                "sensor_tick",
-                ObservedTarget.brainSensor(sensor, owner),
-                AttributionResolver.fromClassName(sensorClass, "tick", ownerModId(owner), compactStack()),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            String sensorClass = sensor.getClass().getName();
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    "brain_sensor_cost",
+                    "sensor_tick",
+                    ObservedTarget.brainSensor(sensor, owner),
+                    AttributionResolver.fromClassName(sensorClass, "tick", ownerModId(owner), compactStack()),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("brain_sensor_capture", overheadStart);
+        }
     }
 
     public static void recordNavigation(PathNavigation navigation, Mob owner, long durationNanos) {
         if (!active() || durationNanos < AI_THRESHOLD_NANOS) {
             return;
         }
-        String navigationClass = navigation.getClass().getName();
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                "navigation_cost",
-                "navigation_tick",
-                ObservedTarget.navigation(navigation, owner),
-                AttributionResolver.fromClassName(navigationClass, "tick", ownerModId(owner), compactStack()),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            String navigationClass = navigation.getClass().getName();
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    "navigation_cost",
+                    "navigation_tick",
+                    ObservedTarget.navigation(navigation, owner, currentAiContextDetail()),
+                    AttributionResolver.fromClassName(navigationClass, "tick", ownerModId(owner), compactStack()),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("navigation_capture", overheadStart);
+        }
     }
 
     public static void recordEntityQuery(Level level, AABB bounds, int resultCount, String queryKind, long durationNanos) {
         if (!active() || durationNanos < ENTITY_QUERY_THRESHOLD_NANOS) {
             return;
         }
-        Mob aiOwner = CURRENT_AI_OWNER.get();
-        ResourceLocation aiOwnerType = aiOwner == null ? null : BuiltInRegistries.ENTITY_TYPE.getKey(aiOwner.getType());
-        String context = aiOwner == null ? null : "ai_owner=" + aiOwnerType + ", uuid=" + aiOwner.getUUID() + ", pos=" + aiOwner.blockPosition();
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                "entity_query_cost",
-                queryKind,
-                ObservedTarget.entityQuery(level, bounds, resultCount, queryKind, context),
-                AttributionResolver.capture("entity_query"),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            Mob aiOwner = CURRENT_AI_OWNER.get();
+            ResourceLocation aiOwnerType = aiOwner == null ? null : BuiltInRegistries.ENTITY_TYPE.getKey(aiOwner.getType());
+            String context = aiOwner == null ? null : "ai_owner=" + aiOwnerType + ", uuid=" + aiOwner.getUUID() + ", pos=" + aiOwner.blockPosition();
+            String aiContext = currentAiContextDetail();
+            if (aiContext != null && !aiContext.isBlank()) {
+                context = context == null || context.isBlank() ? aiContext : context + ", " + aiContext;
+            }
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    "entity_query_cost",
+                    queryKind,
+                    ObservedTarget.entityQuery(level, bounds, resultCount, queryKind, context),
+                    currentAiContextAttribution("entity_query"),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("entity_query_capture", overheadStart);
+        }
     }
 
     public static void recordEventListener(Event event, EventListener listener, long durationNanos) {
         if (!active() || durationNanos < EVENT_LISTENER_THRESHOLD_NANOS) {
             return;
         }
-        String readable = listener == null ? "unknown" : EventListenerMetadata.readable(listener);
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                "event_listener_cost",
-                event == null ? "unknown_event" : event.getClass().getName(),
-                ObservedTarget.eventListener(event, listener),
-                EventListenerMetadata.attribution(listener, readable),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            String readable = listener == null ? "unknown" : EventListenerMetadata.readable(listener);
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    "event_listener_cost",
+                    event == null ? "unknown_event" : event.getClass().getName(),
+                    ObservedTarget.eventListener(event, listener),
+                    EventListenerMetadata.attribution(listener, readable),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("event_listener_capture", overheadStart);
+        }
     }
 
     public static void recordRenderSection(String section, long durationNanos) {
         if (!active() || durationNanos < RENDER_SECTION_THRESHOLD_NANOS) {
             return;
         }
-        ScannerRuntime.sessions().recordSection(new SectionRecord(
-                "render_cost",
-                section,
-                ObservedTarget.client(section, "client render section"),
-                AttributionResolver.capture("client_render"),
-                durationNanos
-        ));
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            ScannerRuntime.sessions().recordSection(new SectionRecord(
+                    "render_cost",
+                    section,
+                    ObservedTarget.client(section, "client render section"),
+                    AttributionResolver.capture("client_render"),
+                    durationNanos
+            ));
+        } finally {
+            ScannerSelfOverhead.end("render_section_capture", overheadStart);
+        }
     }
 
-    public static void recordClientFrame(String section, long durationNanos, int reportedFps, String screenName, boolean inWorld) {
+    public static void recordClientFrame(
+            String section,
+            long durationNanos,
+            int reportedFps,
+            String screenName,
+            boolean inWorld,
+            ClientFrameBreakdown.Snapshot breakdown,
+            ClientFrameContext context
+    ) {
         if (!active()) {
             return;
         }
-        List<String> stack = durationNanos >= CLIENT_FRAME_STACK_THRESHOLD_NANOS ? compactStack() : List.of();
-        ScannerRuntime.sessions().recordClientFrame(section, durationNanos, reportedFps, screenName, inWorld, stack);
+        long overheadStart = ScannerSelfOverhead.start();
+        try {
+            List<String> stack = durationNanos >= CLIENT_FRAME_STACK_THRESHOLD_NANOS ? compactStack() : List.of();
+            ScannerRuntime.sessions().recordClientFrame(section, durationNanos, reportedFps, screenName, inWorld, stack, breakdown, context);
+        } finally {
+            ScannerSelfOverhead.end("client_frame_capture", overheadStart);
+        }
     }
 
     private static CallerAttribution scheduledTickAttribution(ObservedTarget target, String origin) {
@@ -286,8 +386,54 @@ public final class CostRecorder {
         return key == null ? "unknown" : key.getNamespace();
     }
 
+    private static String currentAiContextDetail() {
+        AiContext context = CURRENT_AI_CONTEXT.get();
+        return context == null ? null : context.detail();
+    }
+
+    private static CallerAttribution currentAiContextAttribution(String fallbackModId) {
+        AiContext context = CURRENT_AI_CONTEXT.get();
+        if (context == null) {
+            return AttributionResolver.capture(fallbackModId);
+        }
+        return AttributionResolver.fromClassName(context.componentClass(), context.phase(), context.ownerModId(), compactStack());
+    }
+
     private static final class AttributionSample {
         private final AtomicInteger count = new AtomicInteger();
         private volatile CallerAttribution last;
+    }
+
+    private record AiContext(String kind, String componentClass, String phase, int priority, String ownerType, String ownerModId, String ownerUuid, String ownerPos) {
+        private static AiContext goal(String goalClass, String phase, int priority, Mob owner) {
+            ResourceLocation ownerType = ownerType(owner);
+            return new AiContext("goal", goalClass, phase, priority, ownerType.toString(), ownerType.getNamespace(), owner.getUUID().toString(), pos(owner));
+        }
+
+        private static AiContext brain(String componentClass, String phase, LivingEntity owner) {
+            ResourceLocation ownerType = ownerType(owner);
+            return new AiContext("brain", componentClass, phase, -1, ownerType.toString(), ownerType.getNamespace(), owner.getUUID().toString(), pos(owner));
+        }
+
+        private String detail() {
+            String priorityDetail = priority < 0 ? "" : ", ai_priority=" + priority;
+            return "ai_context=" + kind
+                    + ", ai_component=" + componentClass
+                    + ", ai_phase=" + phase
+                    + priorityDetail
+                    + ", ai_context_owner=" + ownerType
+                    + ", ai_context_uuid=" + ownerUuid
+                    + ", ai_context_pos=" + ownerPos;
+        }
+
+        private static ResourceLocation ownerType(LivingEntity owner) {
+            ResourceLocation key = BuiltInRegistries.ENTITY_TYPE.getKey(owner.getType());
+            return key == null ? ResourceLocation.withDefaultNamespace("unknown") : key;
+        }
+
+        private static String pos(LivingEntity owner) {
+            BlockPos pos = owner.blockPosition();
+            return pos.getX() + "," + pos.getY() + "," + pos.getZ();
+        }
     }
 }

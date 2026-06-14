@@ -1,6 +1,7 @@
 package dev.cutexxgirl.fragmentdoctor.modules.scanner.mixin;
 
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.CostRecorder;
+import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.ClientFrameBreakdown;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.GameRenderer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -26,7 +27,9 @@ public abstract class GameRendererMixin {
     @Inject(method = "render", at = @At("TAIL"))
     private void fragmentdoctor$renderEnd(DeltaTracker deltaTracker, boolean renderLevel, CallbackInfo ci) {
         if (CostRecorder.active() && fragmentdoctor$renderStart != 0L) {
-            CostRecorder.recordRenderSection("game_renderer_render", System.nanoTime() - fragmentdoctor$renderStart);
+            long duration = System.nanoTime() - fragmentdoctor$renderStart;
+            ClientFrameBreakdown.recordGameRenderer(duration);
+            CostRecorder.recordRenderSection("game_renderer_render", duration);
             fragmentdoctor$renderStart = 0L;
         }
     }
@@ -41,7 +44,9 @@ public abstract class GameRendererMixin {
     @Inject(method = "renderLevel", at = @At("TAIL"))
     private void fragmentdoctor$renderLevelEnd(DeltaTracker deltaTracker, CallbackInfo ci) {
         if (CostRecorder.active() && fragmentdoctor$renderLevelStart != 0L) {
-            CostRecorder.recordRenderSection("render_level", System.nanoTime() - fragmentdoctor$renderLevelStart);
+            long duration = System.nanoTime() - fragmentdoctor$renderLevelStart;
+            ClientFrameBreakdown.recordRenderLevel(duration);
+            CostRecorder.recordRenderSection("render_level", duration);
             fragmentdoctor$renderLevelStart = 0L;
         }
     }

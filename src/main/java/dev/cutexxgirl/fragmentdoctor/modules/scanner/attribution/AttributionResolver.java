@@ -180,6 +180,7 @@ public final class AttributionResolver {
         hints.put("net.mehvahdjukaar.moonlight.", "moonlight");
         hints.put("io.redspace.ironsspellbooks.", "irons_spellbooks");
         hints.put("io.redspace.ironslib.", "irons_lib");
+        hints.put("tallestegg.guardvillagers.", "guardvillagers");
         hints.put("com.squoshi.irons_spells_js.", "irons_spells_js");
         hints.put("net.acetheeldritchking.aces_spell_utils.", "aces_spell_utils");
         hints.put("net.acetheeldritchking.cataclysm_spellbooks.", "cataclysm_spellbooks");

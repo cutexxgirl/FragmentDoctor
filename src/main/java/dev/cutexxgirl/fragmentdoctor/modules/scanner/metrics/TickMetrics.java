@@ -9,15 +9,22 @@ public final class TickMetrics {
     private static final int ROLLING_WINDOW = 100;
     private final ArrayDeque<Long> recentTicks = new ArrayDeque<>();
     private final List<Long> allTicks = new ArrayList<>();
+    private final List<Long> adjustedTicks = new ArrayList<>();
+    private final List<Long> scannerOverhead = new ArrayList<>();
     private long maxTickNanos;
+    private long maxAdjustedTickNanos;
 
-    public void addTick(long nanos) {
+    public void addTick(long nanos, long scannerOverheadNanos) {
+        long adjustedNanos = Math.max(0L, nanos - scannerOverheadNanos);
         allTicks.add(nanos);
+        adjustedTicks.add(adjustedNanos);
+        scannerOverhead.add(scannerOverheadNanos);
         recentTicks.addLast(nanos);
         if (recentTicks.size() > ROLLING_WINDOW) {
             recentTicks.removeFirst();
         }
         maxTickNanos = Math.max(maxTickNanos, nanos);
+        maxAdjustedTickNanos = Math.max(maxAdjustedTickNanos, adjustedNanos);
     }
 
     public int tickCount() {
@@ -46,6 +53,30 @@ public final class TickMetrics {
         return maxTickNanos / 1_000_000.0D;
     }
 
+    public double adjustedAverageMspt() {
+        return average(adjustedTicks) / 1_000_000.0D;
+    }
+
+    public double adjustedMaxMspt() {
+        return maxAdjustedTickNanos / 1_000_000.0D;
+    }
+
+    public double averageScannerOverheadMs() {
+        return average(scannerOverhead) / 1_000_000.0D;
+    }
+
+    public double maxScannerOverheadMs() {
+        return scannerOverhead.stream().mapToLong(Long::longValue).max().orElse(0L) / 1_000_000.0D;
+    }
+
+    public double totalScannerOverheadMs() {
+        long total = 0L;
+        for (long nanos : scannerOverhead) {
+            total += nanos;
+        }
+        return total / 1_000_000.0D;
+    }
+
     public double p95Mspt() {
         return percentile(0.95D);
     }
@@ -54,11 +85,23 @@ public final class TickMetrics {
         return percentile(0.99D);
     }
 
+    public double adjustedP95Mspt() {
+        return percentile(adjustedTicks, 0.95D);
+    }
+
+    public double adjustedP99Mspt() {
+        return percentile(adjustedTicks, 0.99D);
+    }
+
     private double percentile(double percentile) {
-        if (allTicks.isEmpty()) {
+        return percentile(allTicks, percentile);
+    }
+
+    private static double percentile(List<Long> values, double percentile) {
+        if (values.isEmpty()) {
             return 0.0D;
         }
-        List<Long> sorted = new ArrayList<>(allTicks);
+        List<Long> sorted = new ArrayList<>(values);
         sorted.sort(Comparator.naturalOrder());
         int index = (int)Math.ceil(percentile * sorted.size()) - 1;
         index = Math.max(0, Math.min(index, sorted.size() - 1));

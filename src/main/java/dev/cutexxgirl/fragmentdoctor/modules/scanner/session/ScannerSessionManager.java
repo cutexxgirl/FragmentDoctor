@@ -4,6 +4,8 @@ import dev.cutexxgirl.fragmentdoctor.FragmentDoctor;
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.attribution.CallerAttribution;
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.ObservedTarget;
 import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.SectionRecord;
+import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.ClientFrameBreakdown;
+import dev.cutexxgirl.fragmentdoctor.modules.scanner.instrumentation.ClientFrameContext;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -100,10 +102,19 @@ public final class ScannerSessionManager {
         }
     }
 
-    public void recordClientFrame(String section, long durationNanos, int reportedFps, String screenName, boolean inWorld, java.util.List<String> stack) {
+    public void recordClientFrame(
+            String section,
+            long durationNanos,
+            int reportedFps,
+            String screenName,
+            boolean inWorld,
+            java.util.List<String> stack,
+            ClientFrameBreakdown.Snapshot breakdown,
+            ClientFrameContext context
+    ) {
         ScannerSession session = active();
         if (session != null) {
-            session.recordClientFrame(section, durationNanos, reportedFps, screenName, inWorld, stack);
+            session.recordClientFrame(section, durationNanos, reportedFps, screenName, inWorld, stack, breakdown, context);
         }
     }
 

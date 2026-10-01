@@ -16,7 +16,7 @@ import net.minecraft.server.MinecraftServer;
 
 public final class ScannerSessionManager {
     private static final int MAX_RETAINED_SESSIONS = 20;
-    private ScannerSession activeSession;
+    private volatile ScannerSession activeSession;
     private Path lastSummaryPath;
 
     public synchronized StartResult start(MinecraftServer server, int seconds) {
@@ -119,12 +119,13 @@ public final class ScannerSessionManager {
     }
 
     public boolean isActive() {
-        ScannerSession session = active();
-        return session != null;
+        ScannerSession session = activeSession;
+        return session != null && session.isActive();
     }
 
-    private synchronized ScannerSession active() {
-        return activeSession != null && activeSession.isActive() ? activeSession : null;
+    private ScannerSession active() {
+        ScannerSession session = activeSession;
+        return session != null && session.isActive() ? session : null;
     }
 
     private static void rotateOldSessions(Path directory) throws IOException {

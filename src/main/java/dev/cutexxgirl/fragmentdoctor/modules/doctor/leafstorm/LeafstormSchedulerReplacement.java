@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.function.BiConsumer;
+import java.util.function.LongPredicate;
 import java.util.stream.Collectors;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -49,13 +50,22 @@ public final class LeafstormSchedulerReplacement {
 
     public static void onServerTickStart() {
         serverTickIndex++;
-        tickStartNanos = System.nanoTime();
         counters = new TickCounters();
         RuntimeMode mode = runtimeMode();
         if (mode != currentMode) {
             clear();
             currentMode = mode;
         }
+        if (mode == RuntimeMode.OFF) {
+            tickStartNanos = 0L;
+            currentGlobalBudget = 0;
+            currentScanBudget = 0;
+            remainingExecutionBudget = 0;
+            remainingScanBudget = 0;
+            counters.mode = mode;
+            return;
+        }
+        tickStartNanos = System.nanoTime();
         currentGlobalBudget = mode == RuntimeMode.ACTIVE ? globalBudgetFor(lastMspt) : 0;
         currentScanBudget = mode == RuntimeMode.ACTIVE ? scanBudgetFor(lastMspt) : 0;
         remainingExecutionBudget = currentGlobalBudget;
@@ -67,6 +77,9 @@ public final class LeafstormSchedulerReplacement {
     }
 
     public static void onServerTickEnd(MinecraftServer server) {
+        if (currentMode == RuntimeMode.OFF) {
+            return;
+        }
         if (tickStartNanos != 0L) {
             lastMspt = (System.nanoTime() - tickStartNanos) / 1_000_000.0D;
             tickStartNanos = 0L;
@@ -150,7 +163,12 @@ public final class LeafstormSchedulerReplacement {
     }
 
     @SuppressWarnings("unchecked")
-    public static <T> void drain(Object tickAccess, BiConsumer<BlockPos, T> ticker, long gameTime) {
+    public static <T> void drain(
+            Object tickAccess,
+            BiConsumer<BlockPos, T> ticker,
+            long gameTime,
+            LongPredicate tickCheck
+    ) {
         if (!activeReplacement()) {
             return;
         }
@@ -187,6 +205,11 @@ public final class LeafstormSchedulerReplacement {
                 continue;
             }
             long chunkKey = chunkKey(job.pos);
+            if (tickCheck == null || !tickCheck.test(chunkKey)) {
+                counters.skippedNonTickingChunk++;
+                reschedule(scheduler, job, gameTime + 20L);
+                continue;
+            }
             int usedInChunk = scheduler.chunkBudgets.getOrDefault(chunkKey, 0);
             if (usedInChunk >= perChunkBudget) {
                 counters.skippedHotChunk++;
@@ -252,6 +275,7 @@ public final class LeafstormSchedulerReplacement {
                 snapshot.coalesced,
                 snapshot.debounced,
                 snapshot.executed,
+                snapshot.skippedNonTickingChunk,
                 snapshot.skippedHotChunk,
                 snapshot.skippedCostlyChunk,
                 snapshot.costlyLeafTicks,
@@ -354,7 +378,11 @@ public final class LeafstormSchedulerReplacement {
     }
 
     private static void rescheduleForNextTick(LeafScheduler scheduler, LeafJob job, long gameTime) {
-        job.dueTick = gameTime + 1;
+        reschedule(scheduler, job, gameTime + 1L);
+    }
+
+    private static void reschedule(LeafScheduler scheduler, LeafJob job, long dueTick) {
+        job.dueTick = dueTick;
         job.version++;
         scheduler.dueHeap.add(new HeapEntry(job.key, job.dueTick, job.priority, job.subTickOrder, job.version, sequence++));
     }
@@ -425,13 +453,14 @@ public final class LeafstormSchedulerReplacement {
         lastSummaryLogTick = serverTickIndex;
         if (LeafstormConfig.VALUES.consoleLogging.get()) {
             FragmentDoctor.LOGGER.warn(
-                    "Leafstorm scheduler: mode={} intercepted={} enqueued={} coalesced={} debounced={} executed={} skipped_hot_chunk={} skipped_costly_chunk={} costly_leaf_ticks={} last_costly_leaf_ms={} dropped_stale={} dropped_overflow={} pending={} execution_budget={} scan_budget={} execution_used={} scan_used={} per_chunk={} paused={} pause_reason={} mspt={} top_leaves={} top_chunks={}",
+                    "Leafstorm scheduler: mode={} intercepted={} enqueued={} coalesced={} debounced={} executed={} skipped_non_ticking_chunk={} skipped_hot_chunk={} skipped_costly_chunk={} costly_leaf_ticks={} last_costly_leaf_ms={} dropped_stale={} dropped_overflow={} pending={} execution_budget={} scan_budget={} execution_used={} scan_used={} per_chunk={} paused={} pause_reason={} mspt={} top_leaves={} top_chunks={}",
                     currentMode.logName,
                     counters.intercepted,
                     counters.enqueued,
                     counters.coalesced,
                     counters.debounced,
                     counters.executed,
+                    counters.skippedNonTickingChunk,
                     counters.skippedHotChunk,
                     counters.skippedCostlyChunk,
                     counters.costlyLeafTicks,
@@ -476,6 +505,7 @@ public final class LeafstormSchedulerReplacement {
         summary.addProperty("coalesced", counters.coalesced);
         summary.addProperty("debounced", counters.debounced);
         summary.addProperty("executed", counters.executed);
+        summary.addProperty("skipped_non_ticking_chunk", counters.skippedNonTickingChunk);
         summary.addProperty("skipped_hot_chunk", counters.skippedHotChunk);
         summary.addProperty("skipped_costly_chunk", counters.skippedCostlyChunk);
         summary.addProperty("costly_leaf_ticks", counters.costlyLeafTicks);
@@ -636,6 +666,7 @@ public final class LeafstormSchedulerReplacement {
         private int coalesced;
         private int debounced;
         private int executed;
+        private int skippedNonTickingChunk;
         private int skippedHotChunk;
         private int skippedCostlyChunk;
         private int costlyLeafTicks;
@@ -663,7 +694,7 @@ public final class LeafstormSchedulerReplacement {
         }
 
         private int events() {
-            return intercepted + shadowIntercepted + enqueued + coalesced + debounced + executed + skippedHotChunk + skippedCostlyChunk + costlyLeafTicks + droppedStale + droppedOverflow;
+            return intercepted + shadowIntercepted + enqueued + coalesced + debounced + executed + skippedNonTickingChunk + skippedHotChunk + skippedCostlyChunk + costlyLeafTicks + droppedStale + droppedOverflow;
         }
 
         private String topLeaves() {
@@ -702,6 +733,7 @@ public final class LeafstormSchedulerReplacement {
             copy.coalesced = coalesced;
             copy.debounced = debounced;
             copy.executed = executed;
+            copy.skippedNonTickingChunk = skippedNonTickingChunk;
             copy.skippedHotChunk = skippedHotChunk;
             copy.skippedCostlyChunk = skippedCostlyChunk;
             copy.costlyLeafTicks = costlyLeafTicks;
@@ -736,6 +768,7 @@ public final class LeafstormSchedulerReplacement {
             int coalesced,
             int debounced,
             int executed,
+            int skippedNonTickingChunk,
             int skippedHotChunk,
             int skippedCostlyChunk,
             int costlyLeafTicks,

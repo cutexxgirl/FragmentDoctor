@@ -30,7 +30,7 @@ public final class ThreadSampleTracker {
             workerSamples++;
             target = workerFrames;
         }
-        addFrames(target, frames);
+        addFrames(target, role, frames);
         timeline.computeIfAbsent(windowIndex, ignored -> new Bucket()).add(role, frames);
     }
 
@@ -69,7 +69,12 @@ public final class ThreadSampleTracker {
         source.forEach((frame, count) -> target.merge(frame, count, Integer::sum));
     }
 
-    private static void addFrames(Map<String, Integer> target, StackTraceElement[] frames) {
+    private static void addFrames(Map<String, Integer> target, String role, StackTraceElement[] frames) {
+        int limit = switch (role) {
+            case ROLE_SERVER -> 32;
+            case ROLE_RENDER -> 20;
+            default -> 12;
+        };
         int added = 0;
         for (StackTraceElement frame : frames) {
             String className = frame.getClassName();
@@ -81,7 +86,7 @@ public final class ThreadSampleTracker {
             }
             target.merge(className + "#" + frame.getMethodName() + ":" + frame.getLineNumber(), 1, Integer::sum);
             added++;
-            if (added >= 12) {
+            if (added >= limit) {
                 break;
             }
         }
@@ -93,7 +98,7 @@ public final class ThreadSampleTracker {
         private final Map<String, Integer> worker = new LinkedHashMap<>();
 
         private void add(String role, StackTraceElement[] frames) {
-            addFrames(frames(role), frames);
+            addFrames(frames(role), role, frames);
         }
 
         private Map<String, Integer> frames(String role) {

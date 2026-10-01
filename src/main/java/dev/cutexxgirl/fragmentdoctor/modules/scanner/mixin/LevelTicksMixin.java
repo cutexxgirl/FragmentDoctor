@@ -37,6 +37,13 @@ public abstract class LevelTicksMixin<T> {
 
     @Inject(method = "runCollectedTicks", at = @At("HEAD"))
     private void fragmentdoctor$drainScheduledLeafTicks(BiConsumer<BlockPos, T> ticker, CallbackInfo ci) {
-        LeafstormSchedulerReplacement.drain(this, ticker, fragmentdoctor$gameTime);
+        @SuppressWarnings("unchecked")
+        LevelTicksAccessor<T> accessor = (LevelTicksAccessor<T>)(Object)this;
+        LeafstormSchedulerReplacement.drain(
+                this,
+                ticker,
+                fragmentdoctor$gameTime,
+                accessor.fragmentdoctor$getTickCheck()
+        );
     }
 }

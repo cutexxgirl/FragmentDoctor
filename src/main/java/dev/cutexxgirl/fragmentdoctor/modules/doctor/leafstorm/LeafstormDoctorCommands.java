@@ -41,6 +41,7 @@ public final class LeafstormDoctorCommands {
                 + " coalesced=" + scheduler.coalesced()
                 + " debounced=" + scheduler.debounced()
                 + " executed=" + scheduler.executed()
+                + " skipped_non_ticking_chunk=" + scheduler.skippedNonTickingChunk()
                 + " skipped_hot_chunk=" + scheduler.skippedHotChunk()
                 + " skipped_costly_chunk=" + scheduler.skippedCostlyChunk()
                 + " costly_leaf_ticks=" + scheduler.costlyLeafTicks()

@@ -611,7 +611,7 @@ public final class ScannerSession {
         object.addProperty("server_samples", threadSamples.serverSamples());
         object.addProperty("worker_samples", threadSamples.workerSamples());
         object.add("render_frames", countedMap(threadSamples.renderFrames()));
-        object.add("server_frames", countedMap(threadSamples.serverFrames()));
+        object.add("server_frames", countedMap(threadSamples.serverFrames(), 40));
         object.add("worker_frames", countedMap(threadSamples.workerFrames()));
         writer.write(object);
     }
@@ -634,10 +634,14 @@ public final class ScannerSession {
     }
 
     private static JsonArray countedMap(Map<String, Integer> map) {
+        return countedMap(map, 20);
+    }
+
+    private static JsonArray countedMap(Map<String, Integer> map, int limit) {
         JsonArray array = new JsonArray();
         map.entrySet().stream()
                 .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                .limit(20)
+                .limit(limit)
                 .forEach(entry -> {
                     JsonObject object = new JsonObject();
                     object.addProperty("key", entry.getKey());

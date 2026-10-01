@@ -170,7 +170,7 @@ public final class ScanSummaryWriter {
         builder.append("- server_samples: `").append(threadSamples.serverSamples()).append("`\n");
         builder.append("- worker_samples: `").append(threadSamples.workerSamples()).append("`\n");
         builder.append("- top_render_frames: ").append(top(threadSamples.renderFrames(), 12)).append("\n");
-        builder.append("- top_server_frames: ").append(top(threadSamples.serverFrames(), 12)).append("\n");
+        builder.append("- top_server_frames: ").append(top(threadSamples.serverFrames(), 32)).append("\n");
         builder.append("- top_worker_frames: ").append(top(threadSamples.workerFrames(), 12)).append("\n\n");
 
         builder.append("## AI cost breakdown\n\n");

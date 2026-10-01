@@ -1,6 +1,7 @@
 package dev.cutexxgirl.fragmentdoctor.modules.scanner.mixin;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import java.util.function.LongPredicate;
 import net.minecraft.world.ticks.LevelChunkTicks;
 import net.minecraft.world.ticks.LevelTicks;
 import org.spongepowered.asm.mixin.Mixin;
@@ -10,4 +11,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface LevelTicksAccessor<T> {
     @Accessor("allContainers")
     Long2ObjectMap<LevelChunkTicks<T>> fragmentdoctor$getAllContainers();
+
+    @Accessor("tickCheck")
+    LongPredicate fragmentdoctor$getTickCheck();
 }

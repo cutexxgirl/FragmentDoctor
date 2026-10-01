@@ -44,9 +44,18 @@ public final class CreateSmoother {
 
     public static void onServerTickStart() {
         serverTickIndex++;
-        tickStartNanos = System.nanoTime();
         counters = new TickCounters();
         counters.enabled = enabled();
+        if (!counters.enabled) {
+            tickStartNanos = 0L;
+            remainingBlockEntityBudget = 0;
+            remainingEntityBudget = 0;
+            remainingHighRiskBudget = 0;
+            remainingForcedBlockEntityBudget = 0;
+            remainingForcedEntityBudget = 0;
+            return;
+        }
+        tickStartNanos = System.nanoTime();
         counters.pressured = pressured();
         remainingBlockEntityBudget = counters.pressured ? LeafstormConfig.VALUES.createSmootherBlockEntityBudget.get() : Integer.MAX_VALUE;
         remainingEntityBudget = counters.pressured ? LeafstormConfig.VALUES.createSmootherEntityBudget.get() : Integer.MAX_VALUE;
@@ -58,6 +67,9 @@ public final class CreateSmoother {
     }
 
     public static void onServerTickEnd(MinecraftServer server) {
+        if (!counters.enabled) {
+            return;
+        }
         if (tickStartNanos != 0L) {
             lastMspt = (System.nanoTime() - tickStartNanos) / 1_000_000.0D;
             tickStartNanos = 0L;
@@ -133,10 +145,6 @@ public final class CreateSmoother {
             allow(blockEntity);
             return false;
         }
-        if (highRisk && age <= LeafstormConfig.VALUES.createSmootherHighRiskInitialDelayTicks.get()) {
-            skip(blockEntity, state);
-            return true;
-        }
         int maxSkips = LeafstormConfig.VALUES.createSmootherMaxConsecutiveSkips.get();
         if (state.consecutiveSkips >= maxSkips) {
             if ((!highRisk || tryUseHighRiskBudget()) && tryUseForcedBudget(blockEntity)) {
@@ -145,6 +153,10 @@ public final class CreateSmoother {
                 allow(blockEntity);
                 return false;
             }
+            skip(blockEntity, state);
+            return true;
+        }
+        if (highRisk && age <= LeafstormConfig.VALUES.createSmootherHighRiskInitialDelayTicks.get()) {
             skip(blockEntity, state);
             return true;
         }
